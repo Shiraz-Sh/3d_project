@@ -11,6 +11,7 @@
 #include "inc_irit/geom_lib.h"
 #include "inc_irit/cagd_lib.h"
 #include "inc_irit/ip_cnvrt.h"
+
 #include "prsr_loc.h"
 
 /*
@@ -590,5 +591,200 @@ IPObjectStruct* IritPrsrExtrudeProjectedViewPolys(const IPObjectStruct* ProjPoly
     }
 
     return ResList;
+}
+
+/* * Helper: Manually generate a LookAt matrix.
+ * This replaces the hypothetical 'IritGeomMatGenLookAt'.
+ * * Logic:
+ * 1. F = Normalize(Center - Eye)
+ * 2. S = Normalize(Cross(F, Up))  -> Side/Right vector
+ * 3. U = Cross(S, F)              -> Recomputed Up vector orthogonal to F
+ * * The resulting matrix maps the world so the camera is at origin,
+ * looking down the positive Z axis (IRIT standard).
+ */
+void GenLookAtMatrix(IrtVecType Eye, IrtVecType Center, IrtVecType Up, IrtHmgnMatType Mat)
+{
+    IrtVecType F, S, U;
+
+    /* 1. Calculate Forward Vector (F) */
+    IRIT_VEC_SUB(F, Center, Eye);
+    IRIT_VEC_NORMALIZE(F);
+
+    /* 2. Calculate Side Vector (S) = F x Up */
+    IRIT_CROSS_PROD(S, F, Up);
+    /* Check for degenerate case where F is parallel to Up */
+    if ((IRIT_DOT_PROD(S, S)) < 1e-6) {
+        /* Fallback: If looking straight up/down, choose X-axis as side */
+        S[0] = 1.0; S[1] = 0.0; S[2] = 0.0;
+    }
+    IRIT_VEC_NORMALIZE(S);
+
+    /* 3. Calculate True Up Vector (U) = S x F */
+    IRIT_CROSS_PROD(U, S, F);
+    IRIT_VEC_NORMALIZE(U);
+
+    /* 4. Construct Matrix
+       Row 0: S
+       Row 1: U
+       Row 2: F (or -F depending on coordinate system, IRIT usually +Z view)
+       Row 3: Translation
+    */
+    IritMiscMatGenUnitMat(Mat);
+
+    /* Rotation Part */
+    Mat[0][0] = S[0];  Mat[0][1] = S[1];  Mat[0][2] = S[2];
+    Mat[1][0] = U[0];  Mat[1][1] = U[1];  Mat[1][2] = U[2];
+    /* Note: IRIT often uses +Z as view direction. If standard OpenGL, this row is usually -F */
+    Mat[2][0] = F[0];  Mat[2][1] = F[1];  Mat[2][2] = F[2];
+
+    /* Translation Part (-Eye dot Basis) */
+    Mat[0][3] = -IRIT_DOT_PROD(S, Eye);
+    Mat[1][3] = -IRIT_DOT_PROD(U, Eye);
+    Mat[2][3] = -IRIT_DOT_PROD(F, Eye);
+}
+
+
+#include <stdio.h>
+#include <math.h>
+#include "inc_irit/irit_sm.h"
+#include "inc_irit/iritprsr.h"
+#include "inc_irit/geom_lib.h"
+
+/* * Helper: Generate a View Matrix from spherical coordinates.
+ * Implements the camera position logic from Eq (3) in the paper.
+ * r is fixed to 2.0 as per the paper[cite: 171].
+ */
+void GenViewMatrix(IrtRType phi, IrtRType theta, IrtHmgnMatType Mat)
+{
+    IrtVecType CamPos, Center, Up;
+    IrtRType r = 2.0;
+
+    /* Eq (3): Convert spherical (phi, theta) to Cartesian (x, y, z) */
+    CamPos[0] = r * cos(phi) * cos(theta);
+    CamPos[1] = r * cos(phi) * sin(theta);
+    CamPos[2] = r * sin(phi);
+
+    Center[0] = 0.0; Center[1] = 0.0; Center[2] = 0.0;
+
+    /* Simple Up vector logic (handle singularity at poles) */
+    if (fabs(CamPos[0]) < 0.1 && fabs(CamPos[1]) < 0.1) {
+        Up[0] = 1.0; Up[1] = 0.0; Up[2] = 0.0;
+    }
+    else {
+        Up[0] = 0.0; Up[1] = 0.0; Up[2] = 1.0;
+    }
+
+    /* Use IRIT or standard LookAt logic to create the matrix */
+    GenLookAtMatrix(CamPos, Center, Up, Mat);
+}
+
+/*
+ * Helper: Calculate projected 2D area of a polygon chain.
+ * Used as a heuristic: Maximize projected area ~ Maximize feature definition.
+ */
+IrtRType CalcPolygonArea(IPObjectStruct* PObj)
+{
+    IrtRType area = 0.0;
+    if (PObj == NULL || !IP_IS_POLY_OBJ(PObj)) return 0.0;
+
+    for (IPPolygonStruct* Pl = PObj->U.Pl; Pl != NULL; Pl = Pl->Pnext) {
+        /* Standard Green's theorem for polygon area in 2D (XY plane) */
+        /* Note: The silhouette extractor usually returns 3D polylines.
+           We assume they are projected or we approximate via their major 2D plane.
+           For robustness, we can project to the view plane, but for a simple
+           heuristic, we summing lengths or bounding box diagonals is also fast.
+           Here we implement a simplified 3D polygon area estimation. */
+
+        area += IritGeomPolyOnePolyArea(Pl, TRUE); // Uses IRIT's built-in area function
+    }
+    return area;
+}
+
+/*
+ * Main Function: Sampling-Based View Selection
+ * * 1. Generates 'NumSamples' viewpoints using a Fibonacci Lattice (uniform sphere).
+ * 2. Calls `IritPrsrGetSilhouettesForViews` to batch process them.
+ * 3. Evaluates the returned silhouettes and picks the best one.
+ * 4. Returns the index of the best view and the matrix itself.
+ */
+int SelectBestViewSampling(IPObjectStruct* PObj,
+    int NumSamples,
+    IrtHmgnMatType* ResultMat)
+{
+    int i, bestIdx = -1;
+    IrtRType maxScore = -1.0;
+    IrtHmgnMatType* ViewMats = NULL;
+
+    /* 1. Generate Candidate Matrices */
+    /* The paper uses Fibonacci grid sampling  */
+    ViewMats = (IrtHmgnMatType*)IritMalloc(sizeof(IrtHmgnMatType) * NumSamples);
+
+    IrtRType phi = (sqrt(5.0) - 1.0) / 2.0; /* Golden ratio */
+
+    for (i = 0; i < NumSamples; ++i) {
+        IrtRType y = 1 - (i / (IrtRType)(NumSamples - 1)) * 2; /* y goes from 1 to -1 */
+        IrtRType radius = sqrt(1 - y * y);
+
+        IrtRType theta = 2 * M_PI * phi * i;
+
+        IrtRType x = cos(theta) * radius;
+        IrtRType z = sin(theta) * radius;
+
+        /* Convert this unit vector (x,y,z) on sphere to spherical angles for our helper */
+        /* Or directly use LookAt with this vector scaled by R=2.0 */
+        IrtVecType CamPos, Center, Up;
+        CamPos[0] = x * 2.0; CamPos[1] = y * 2.0; CamPos[2] = z * 2.0;
+        Center[0] = 0.0; Center[1] = 0.0; Center[2] = 0.0;
+        Up[0] = 0.0; Up[1] = 0.0; Up[2] = 1.0;
+
+        /* Handle pole singularity for Up vector */
+        if (fabs(CamPos[0]) < 0.01 && fabs(CamPos[1]) < 0.01) {
+            Up[0] = 1.0; Up[1] = 0.0; Up[2] = 0.0;
+        }
+
+        GenLookAtMatrix(CamPos, Center, Up, ViewMats[i]);
+    }
+
+    /* 2. Batch Process Silhouettes */
+    /* We use UsePreprocess = 1 (TRUE) as recommended in code comments for many views */
+    printf("Evaluating %d views...\n", NumSamples);
+    IPObjectStruct* SilList = IritPrsrGetSilhouettesForViews(PObj, ViewMats, NumSamples, 20, TRUE);
+
+    if (SilList == NULL || !IP_IS_OLST_OBJ(SilList)) {
+        IritFree(ViewMats);
+        return -1;
+    }
+
+    /* 3. Evaluate Results */
+    /* SilList is a list of objects, one per view */
+    int viewIdx = 0;
+    IPObjectStruct* SilObj;
+
+    /* Iterate over the IRIT List Object */
+    for (viewIdx = 0; viewIdx < NumSamples; ++viewIdx) {
+        SilObj = IritPrsrListObjectGet(SilList, viewIdx);
+
+        if (SilObj != NULL) {
+            /* Heuristic: Maximize projected area */
+            IrtRType score = CalcPolygonArea(SilObj);
+
+            if (score > maxScore) {
+                maxScore = score;
+                bestIdx = viewIdx;
+            }
+        }
+    }
+
+    /* 4. Output Result */
+    if (bestIdx >= 0) {
+        ResultMat = ViewMats[bestIdx]; // Copy struct
+        printf("Selected View %d with Score: %f\n", bestIdx, maxScore);
+    }
+
+    /* Cleanup */
+    IritPrsrFreeObject(SilList);
+    IritFree(ViewMats);
+
+    return bestIdx;
 }
 
