@@ -30,8 +30,8 @@
  */
 
 IPObjectStruct* IritPrsrExtrude2DPointsToSolidDir(const IrtE2PtStruct* pts,
-                                                  int n,
-                                                  IrtVecType Dir)
+    int n,
+    IrtVecType Dir)
 {
     int i;
     IPPolygonStruct* Pl;
@@ -155,7 +155,7 @@ IPObjectStruct* IritPrsrGetSilhouettesForViews(const IPObjectStruct* PObj,
     IPObjectStruct* PList = NULL;
     VoidPtr PrepSils = NULL;
     IPObjectStruct* WorkCopy = NULL;
-    IPObjectStruct *Head = NULL, *Tail = NULL;
+    IPObjectStruct* Head = NULL, * Tail = NULL;
     int resolvedGrid = (GridSize > 0) ? GridSize : 20;
 
     if (PObj == NULL || ViewMats == NULL || NumViews <= 0)
@@ -167,7 +167,7 @@ IPObjectStruct* IritPrsrGetSilhouettesForViews(const IPObjectStruct* PObj,
     /* Preprocess once if requested. */
     if (UsePreprocess) {
         /* Copy the polygonal object and ensure regularization/adjacencies. */
-        WorkCopy = IritPrsrCopyObject(NULL, (IPObjectStruct*)PObj, TRUE);
+        WorkCopy = IritPrsrCopyObject(NULL, (IPObjectStruct*)(void*)PObj, TRUE);
         if (WorkCopy == NULL)
             return NULL;
 
@@ -194,7 +194,7 @@ IPObjectStruct* IritPrsrGetSilhouettesForViews(const IPObjectStruct* PObj,
         }
         else {
             /* Prepare a regularized per-view copy and compute directly. */
-            WorkCopy = IritPrsrCopyObject(NULL, (IPObjectStruct*)PObj, TRUE);
+            WorkCopy = IritPrsrCopyObject(NULL, (IPObjectStruct*)(void*)PObj, TRUE);
             if (WorkCopy == NULL)
                 continue;
 
@@ -249,8 +249,8 @@ IPObjectStruct* IritPrsrGetSilhouettesForViews(const IPObjectStruct* PObj,
  * (IP_OBJ_POLY). Caller owns and must free the returned LIST and its members.
  */
 IPObjectStruct* IritPrsrProjectSilhouetteToViewPolys(const IPObjectStruct* SilList,
-                                                     const IrtHmgnMatType* ViewMats,
-                                                     int NumViews)
+    const IrtHmgnMatType* ViewMats,
+    int NumViews)
 {
     int vi;
 
@@ -291,7 +291,7 @@ IPObjectStruct* IritPrsrProjectSilhouetteToViewPolys(const IPObjectStruct* SilLi
         /* We'll collect all projected polygon components for this silhouette
            into a single polygon-chain (HeadPl). After processing all components
            we create one polygon object for the silhouette and append it to ResList. */
-        IPPolygonStruct *HeadPl = NULL, *TailPl = NULL;
+        IPPolygonStruct* HeadPl = NULL, * TailPl = NULL;
 
         /* Project each polygon component of this silhouette using ViewMat.
            Use IritGeomGenProjectionMat to project points onto the plane
@@ -351,7 +351,7 @@ IPObjectStruct* IritPrsrProjectSilhouetteToViewPolys(const IPObjectStruct* SilLi
             ProjPlane[0] = f[0];
             ProjPlane[1] = f[1];
             ProjPlane[2] = f[2];
-            ProjPlane[3] = - (f[0] * origin[0] + f[1] * origin[1] + f[2] * origin[2]);
+            ProjPlane[3] = -(f[0] * origin[0] + f[1] * origin[1] + f[2] * origin[2]);
 
             /* For parallel projection along direction f, set EyePos.w = 0 and EyePos.xyz = f. */
             EyePos[0] = f[0];
@@ -644,12 +644,6 @@ void GenLookAtMatrix(IrtVecType Eye, IrtVecType Center, IrtVecType Up, IrtHmgnMa
 }
 
 
-#include <stdio.h>
-#include <math.h>
-#include "inc_irit/irit_sm.h"
-#include "inc_irit/iritprsr.h"
-#include "inc_irit/geom_lib.h"
-
 /* * Helper: Generate a View Matrix from spherical coordinates.
  * Implements the camera position logic from Eq (3) in the paper.
  * r is fixed to 2.0 as per the paper[cite: 171].
@@ -700,14 +694,18 @@ IrtRType CalcPolygonArea(IPObjectStruct* PObj)
     return area;
 }
 
+
 /*
  * Main Function: Sampling-Based View Selection
  * * 1. Generates 'NumSamples' viewpoints using a Fibonacci Lattice (uniform sphere).
+ * and return this.
+ * 
+ * 
  * 2. Calls `IritPrsrGetSilhouettesForViews` to batch process them.
  * 3. Evaluates the returned silhouettes and picks the best one.
- * 4. Returns the index of the best view and the matrix itself.
+ * 4. Returns the 3 of the best view and the matrix itself.
  */
-int SelectBestViewSampling(IPObjectStruct* PObj,
+IrtHmgnMatType* SelectBestViewSampling(IPObjectStruct* PObj,
     int NumSamples,
     IrtHmgnMatType* ResultMat)
 {
@@ -748,43 +746,43 @@ int SelectBestViewSampling(IPObjectStruct* PObj,
     /* 2. Batch Process Silhouettes */
     /* We use UsePreprocess = 1 (TRUE) as recommended in code comments for many views */
     printf("Evaluating %d views...\n", NumSamples);
-    IPObjectStruct* SilList = IritPrsrGetSilhouettesForViews(PObj, ViewMats, NumSamples, 20, TRUE);
+    return ViewMats;
+    //IPObjectStruct* SilList = IritPrsrGetSilhouettesForViews(PObj, ViewMats, NumSamples, 20, TRUE);
 
-    if (SilList == NULL || !IP_IS_OLST_OBJ(SilList)) {
-        IritFree(ViewMats);
-        return -1;
-    }
+    //if (SilList == NULL || !IP_IS_OLST_OBJ(SilList)) {
+    //    IritFree(ViewMats);
+    //    return -1;
+    //}
 
-    /* 3. Evaluate Results */
-    /* SilList is a list of objects, one per view */
-    int viewIdx = 0;
-    IPObjectStruct* SilObj;
+    ///* 3. Evaluate Results */
+    ///* SilList is a list of objects, one per view */
+    //int viewIdx = 0;
+    //IPObjectStruct* SilObj;
 
-    /* Iterate over the IRIT List Object */
-    for (viewIdx = 0; viewIdx < NumSamples; ++viewIdx) {
-        SilObj = IritPrsrListObjectGet(SilList, viewIdx);
+    ///* Iterate over the IRIT List Object */
+    //for (viewIdx = 0; viewIdx < NumSamples; ++viewIdx) {
+    //    SilObj = IritPrsrListObjectGet(SilList, viewIdx);
 
-        if (SilObj != NULL) {
-            /* Heuristic: Maximize projected area */
-            IrtRType score = CalcPolygonArea(SilObj);
+    //    if (SilObj != NULL) {
+    //        /* Heuristic: Maximize projected area */
+    //        IrtRType score = CalcPolygonArea(SilObj);
 
-            if (score > maxScore) {
-                maxScore = score;
-                bestIdx = viewIdx;
-            }
-        }
-    }
+    //        if (score > maxScore) {
+    //            maxScore = score;
+    //            bestIdx = viewIdx;
+    //        }
+    //    }
+    //}
 
-    /* 4. Output Result */
-    if (bestIdx >= 0) {
-        ResultMat = ViewMats[bestIdx]; // Copy struct
-        printf("Selected View %d with Score: %f\n", bestIdx, maxScore);
-    }
+    ///* 4. Output Result */
+    //if (bestIdx >= 0) {
+    //    ResultMat = ViewMats[bestIdx]; // Copy struct
+    //    printf("Selected View %d with Score: %f\n", bestIdx, maxScore);
+    //}
 
-    /* Cleanup */
-    IritPrsrFreeObject(SilList);
-    IritFree(ViewMats);
+    ///* Cleanup */
+    //IritPrsrFreeObject(SilList);
+    //IritFree(ViewMats);
 
-    return bestIdx;
+    //return bestIdx;
 }
-
