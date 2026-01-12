@@ -244,346 +244,382 @@ IPObjectStruct* IritPrsrGetSilhouettesForViews(const IPObjectStruct* PObj,
  * are the original polygon vertices projected into the plane orthogonal
  * to the view forward vector and placed back in world space:
  *   WorldProjectedPt = Origin + u * x + v * y
- *
- * Returns a LIST IPObjectStruct * whose elements are polygon objects
- * (IP_OBJ_POLY). Caller owns and must free the returned LIST and its members.
+ * *****************
+ * Change signature: add 'IsPre' flag to let the function name projected polygons accordingly.
+ * Replace previous implementation that didn't set ObjName so extrusion step can map each projected
+ * polygon to its originating view.
  */
-IPObjectStruct* IritPrsrProjectSilhouetteToViewPolys(const IPObjectStruct* SilList,
-    const IrtHmgnMatType* ViewMats,
-    int NumViews)
-{
-    int vi;
+ IPObjectStruct* IritPrsrProjectSilhouetteToViewPolys(const IPObjectStruct* SilList,
+         const IrtHmgnMatType* ViewMats,
+         int NumViews,
+         int IsPre)
+ {
+     if (SilList == NULL || ViewMats == NULL || NumViews <= 0)
+         return NULL;
 
-    if (SilList == NULL || ViewMats == NULL || NumViews <= 0)
-        return NULL;
+     IPObjectStruct* ResList = IritPrsrGenLISTObject(NULL);
+     if (ResList == NULL)
+         return NULL;
 
-    /* Expect a LIST object produced by IritPrsrGetSilhouettesForViews. */
-    if (SilList->U.Lst.PObjList == NULL)
-        return NULL;
+     for (int vi = 0; vi < NumViews; ++vi) {
+         IPObjectStruct* SilObj = IritPrsrListObjectGet((IPObjectStruct*)(void*)SilList, vi);
+         if (SilObj == NULL || !IP_IS_POLY_OBJ(SilObj))
+             continue;
 
-    IPObjectStruct* ResList = IritPrsrGenLISTObject(NULL);
-    if (ResList == NULL)
-        return NULL;
+         /* Extract forward vector (w) from ViewMat (third column) and normalize. */
+         IrtVecType w;
+         w[0] = ViewMats[vi][0][2];
+         w[1] = ViewMats[vi][1][2];
+         w[2] = ViewMats[vi][2][2];
+         {
+             IrtRType wlen = sqrt(IRIT_SQR(w[0]) + IRIT_SQR(w[1]) + IRIT_SQR(w[2]));
+             if (wlen <= IRIT_EPS)
+                 continue;
+             w[0] /= wlen; w[1] /= wlen; w[2] /= wlen;
+         }
 
-    /* For each silhouette (list element) use the corresponding view matrix. */
-    for (vi = 0; vi < NumViews; ++vi) {
-        IPObjectStruct* Sil3D = IritPrsrListObjectGet((IPObjectStruct*)(void*)SilList, vi);
-        if (Sil3D == NULL)
-            continue;
+         /* Build stable orthonormal basis u,v from w. */
+         IrtVecType arb, u, v;
+         if (fabs(w[0]) < 0.9) { arb[0] = 1.0; arb[1] = 0.0; arb[2] = 0.0; }
+         else { arb[0] = 0.0; arb[1] = 1.0; arb[2] = 0.0; }
 
-        /* Extract view forward vector from the 3x3 rotation part (third column). */
-        const IrtHmgnMatType* ViewMat = &ViewMats[vi];
-        IrtVecType f;
-        f[0] = (*ViewMat)[0][2];
-        f[1] = (*ViewMat)[1][2];
-        f[2] = (*ViewMat)[2][2];
+         u[0] = arb[1] * w[2] - arb[2] * w[1];
+         u[1] = arb[2] * w[0] - arb[0] * w[2];
+         u[2] = arb[0] * w[1] - arb[1] * w[0];
+         {
+             IrtRType ul = sqrt(IRIT_SQR(u[0]) + IRIT_SQR(u[1]) + IRIT_SQR(u[2]));
+             if (ul <= IRIT_EPS) continue;
+             u[0] /= ul; u[1] /= ul; u[2] /= ul;
+         }
 
-        /* Normalize forward - if degenerate fallback to +Z. */
-        {
-            IrtRType flen = sqrt(IRIT_SQR(f[0]) + IRIT_SQR(f[1]) + IRIT_SQR(f[2]));
-            if (flen <= IRIT_EPS) {
-                f[0] = 0.0; f[1] = 0.0; f[2] = 1.0;
-                flen = 1.0;
-            }
-            f[0] /= flen; f[1] /= flen; f[2] /= flen;
-        }
+         v[0] = w[1] * u[2] - w[2] * u[1];
+         v[1] = w[2] * u[0] - w[0] * u[2];
+         v[2] = w[0] * u[1] - w[1] * u[0];
 
-        /* We'll collect all projected polygon components for this silhouette
-           into a single polygon-chain (HeadPl). After processing all components
-           we create one polygon object for the silhouette and append it to ResList. */
-        IPPolygonStruct* HeadPl = NULL, * TailPl = NULL;
+         /* For each silhouette polygon, create a projected closed polygon lying on the view plane.
+            Implementation uses 4x4 local transform (world -> [u,v,w] local coords with origin)
+            and its inverse. We project by setting local z = 0, then transform back. */
+         int polyIdx = 0;
+         for (IPPolygonStruct* Pl = SilObj->U.Pl; Pl != NULL; Pl = Pl->Pnext, ++polyIdx) {
+             IPVertexStruct* V = Pl->PVertex;
+             if (V == NULL)
+                 continue;
 
-        /* Project each polygon component of this silhouette using ViewMat.
-           Use IritGeomGenProjectionMat to project points onto the plane
-           orthogonal to the view forward vector passing through the polygon centroid.
-        */
-        for (IPPolygonStruct* Pl = Sil3D->U.Pl; Pl != NULL; Pl = Pl->Pnext) {
-            IPVertexStruct* V = Pl->PVertex;
-            if (V == NULL)
-                continue;
+             /* Count vertices. */
+             int n = 0;
+             IPVertexStruct* cur = V;
+             int guard = 0;
+             while (cur != NULL) {
+                 ++n;
+                 cur = cur->Pnext;
+                 if (++guard > 200000) { n = 0; break; }
+                 if (cur == V) break;
+             }
+             if (n < 3)
+                 continue;
 
-            /* Count vertices (handle circular lists). */
-            int n = 0;
-            IPVertexStruct* cur = V;
-            int guard = 0;
-            while (cur != NULL) {
-                ++n;
-                cur = cur->Pnext;
-                if (++guard > 200000) { n = 0; break; }
-                if (cur == V) break;
-            }
-            if (n < 1)
-                continue;
+             /* Collect coords and centroid (origin). */
+             IrtPtType* coords = (IrtPtType*)IritMalloc(sizeof(IrtPtType) * n);
+             if (coords == NULL)
+                 continue;
 
-            /* Collect coordinates and compute centroid. */
-            IrtPtType* coords = (IrtPtType*)IritMalloc(sizeof(IrtPtType) * n);
-            if (coords == NULL)
-                continue;
+             cur = V;
+             int idx = 0;
+             guard = 0;
+             IrtRType cx = 0.0, cy = 0.0, cz = 0.0;
+             while (cur != NULL && idx < n) {
+                 coords[idx][0] = cur->Coord[0];
+                 coords[idx][1] = cur->Coord[1];
+                 coords[idx][2] = cur->Coord[2];
+                 cx += coords[idx][0];
+                 cy += coords[idx][1];
+                 cz += coords[idx][2];
+                 ++idx;
+                 cur = cur->Pnext;
+                 if (++guard > 200000) break;
+                 if (cur == V) break;
+             }
+             if (idx != n) { IritFree(coords); continue; }
 
-            cur = V;
-            int idx = 0;
-            guard = 0;
-            IrtRType cx = 0.0, cy = 0.0, cz = 0.0;
-            while (cur != NULL && idx < n) {
-                coords[idx][0] = cur->Coord[0];
-                coords[idx][1] = cur->Coord[1];
-                coords[idx][2] = cur->Coord[2];
-                cx += coords[idx][0];
-                cy += coords[idx][1];
-                cz += coords[idx][2];
-                ++idx;
-                cur = cur->Pnext;
-                if (++guard > 200000) break;
-                if (cur == V) break;
-            }
-            if (idx != n) { IritFree(coords); continue; }
+             IrtPtType origin;
+             origin[0] = cx / n; origin[1] = cy / n; origin[2] = cz / n;
 
-            IrtPtType origin;
-            origin[0] = cx / n; origin[1] = cy / n; origin[2] = cz / n;
+             /* Build world->local matrix MatLocal:
+                MatLocal * P_world = [ dot(u,P)-dot(u,origin),
+                                       dot(v,P)-dot(v,origin),
+                                       dot(w,P)-dot(w,origin) ]
+                last row stays unit for homogenous point transform.
+             */
+             IrtHmgnMatType MatLocal, InvMat;
+             IritMiscMatGenUnitMat(MatLocal);
 
-            /* Build projection matrix that projects along direction 'f' onto
-               the plane whose normal is 'f' and that passes through 'origin'. */
-            IrtPlnType ProjPlane;
-            IrtRType EyePos[4];
-            IrtHmgnMatType PMat;
+             MatLocal[0][0] = u[0]; MatLocal[0][1] = u[1]; MatLocal[0][2] = u[2];
+             MatLocal[0][3] = -(u[0] * origin[0] + u[1] * origin[1] + u[2] * origin[2]);
 
-            /* Plane equation Ax + By + Cz + D = 0, with (A,B,C) = f and D = -dot(f, origin). */
-            ProjPlane[0] = f[0];
-            ProjPlane[1] = f[1];
-            ProjPlane[2] = f[2];
-            ProjPlane[3] = -(f[0] * origin[0] + f[1] * origin[1] + f[2] * origin[2]);
+             MatLocal[1][0] = v[0]; MatLocal[1][1] = v[1]; MatLocal[1][2] = v[2];
+             MatLocal[1][3] = -(v[0] * origin[0] + v[1] * origin[1] + v[2] * origin[2]);
 
-            /* For parallel projection along direction f, set EyePos.w = 0 and EyePos.xyz = f. */
-            EyePos[0] = f[0];
-            EyePos[1] = f[1];
-            EyePos[2] = f[2];
-            EyePos[3] = 0.0;
+             MatLocal[2][0] = w[0]; MatLocal[2][1] = w[1]; MatLocal[2][2] = w[2];
+             MatLocal[2][3] = -(w[0] * origin[0] + w[1] * origin[1] + w[2] * origin[2]);
 
-            /* Build projection matrix (ray from EyePos intersects ProjPlane). */
-            IritGeomGenProjectionMat(ProjPlane, EyePos, PMat);
+             MatLocal[3][0] = 0.0;  MatLocal[3][1] = 0.0;  MatLocal[3][2] = 0.0; MatLocal[3][3] = 1.0;
 
-            /* Create polygon structure mapped back into world, but lying in view plane. */
-            IPPolygonStruct* NewPl = IritPrsrAllocPolygon(0, NULL, NULL);
-            IPVertexStruct* FirstV = NULL;
-            IPVertexStruct* PrevV = NULL;
+             if (!IritMiscMatInverseMatrix(MatLocal, InvMat)) {
+                 IritFree(coords);
+                 continue;
+             }
 
-            for (int j = 0; j < n; ++j) {
-                IPVertexStruct* NV = IritPrsrAllocVertex2(NULL);
+             /* Create new polygon and vertex list from projected points (z=0 in local coords). */
+             IPPolygonStruct* NewPl = IritPrsrAllocPolygon(0, NULL, NULL);
+             IPVertexStruct* FirstV = NULL;
+             IPVertexStruct* PrevV = NULL;
 
-                /* Project the world-space vertex into the view plane using the projection matrix. */
-                IrtPtType Pproj;
-                IritMiscMatMultPtby4by4(Pproj, coords[j], PMat);
+             for (int j = 0; j < n; ++j) {
+                 IrtPtType localP;
+                 IritMiscMatMultPtby4by4(localP, coords[j], MatLocal);
 
-                NV->Coord[0] = Pproj[0];
-                NV->Coord[1] = Pproj[1];
-                NV->Coord[2] = Pproj[2];
+                 /* Project into view plane by zeroing local z. */
+                 localP[2] = 0.0;
 
-                if (FirstV == NULL) {
-                    FirstV = PrevV = NV;
-                }
-                else {
-                    PrevV->Pnext = NV;
-                    PrevV = NV;
-                }
-            }
+                 /* Map back to world coordinates. */
+                 IrtPtType worldProj;
+                 IritMiscMatMultPtby4by4(worldProj, localP, InvMat);
 
-            if (PrevV != NULL) {
-                PrevV->Pnext = FirstV;
-                NewPl->PVertex = FirstV;
-                IritPrsrUpdatePolyPlane(NewPl);
+                 /* Allocate and link vertex. */
+                 IPVertexStruct* NV = IritPrsrAllocVertex2(NULL);
+                 NV->Coord[0] = worldProj[0];
+                 NV->Coord[1] = worldProj[1];
+                 NV->Coord[2] = worldProj[2];
 
-                /* Append NewPl into this silhouette's polygon chain (do not yet create a POLY object). */
-                NewPl->Pnext = NULL;
-                if (HeadPl == NULL) {
-                    HeadPl = TailPl = NewPl;
-                }
-                else {
-                    TailPl->Pnext = NewPl;
-                    TailPl = NewPl;
-                }
-            }
-            else {
-                IritPrsrFreePolygon(NewPl);
-            }
+                 if (FirstV == NULL) {
+                     FirstV = PrevV = NV;
+                 }
+                 else {
+                     PrevV->Pnext = NV;
+                     PrevV = NV;
+                 }
+             }
 
-            IritFree(coords);
-        } /* per polygon */
+             /* Close loop and attach polygon. */
+             PrevV->Pnext = FirstV;
+             NewPl->PVertex = FirstV;
 
-        /* If we collected any projected polygon components for this silhouette,
-           wrap them into a single polygon object and append to ResList so each
-           silhouette yields one 2D object. */
-        if (HeadPl != NULL) {
-            IPObjectStruct* PolyObj = IritPrsrGenPOLYObject(HeadPl);
-            IP_SET_POLYGON_OBJ(PolyObj);
-            PolyObj->Pnext = NULL;
-            IritPrsrListObjectAppend(ResList, PolyObj);
-        }
-    } /* per silhouette/list element */
+             IritPrsrUpdatePolyPlane(NewPl);
 
-    /* Return NULL if nothing appended. */
-    if (ResList->U.Lst.PObjList == NULL || ResList->U.Lst.ListMaxLen == 0) {
-        IritPrsrFreeObject(ResList);
-        return NULL;
-    }
+             IPObjectStruct* PolyObj = IritPrsrGenPOLYObject(NewPl);
+             if (PolyObj != NULL) {
+                 IP_SET_POLYGON_OBJ(PolyObj);
+                 PolyObj->Pnext = NULL;
 
-    return ResList;
-}
+                 /* Set name encoding view and polygon index so extrusion step knows the view. */
+                 char namebuf[256];
+                 if (IsPre)
+                     snprintf(namebuf, sizeof(namebuf), "proj_pre_view%d_poly%03d", vi, polyIdx);
+                 else
+                     snprintf(namebuf, sizeof(namebuf), "proj_dir_view%d_poly%03d", vi, polyIdx);
+
+                 PolyObj->ObjName = IritMiscStrdup(namebuf);
+
+                 IritPrsrListObjectAppend(ResList, PolyObj);
+             }
+
+             IritFree(coords);
+         } /* per polygon */
+     } /* per view */
+
+     if (ResList->U.Lst.PObjList == NULL || ResList->U.Lst.ListMaxLen == 0) {
+         IritPrsrFreeObject(ResList);
+         return NULL;
+     }
+
+     return ResList;
+ }
+
+
 
 /*
- * Extrude projected view polygons (as returned by IritPrsrProjectSilhouetteToViewPolys)
- * along the view forward direction and return a LIST of resulting solids.
+ * Extrude projected silhouette polygons (precomputed and direct lists)
+ * toward each view's forward direction and save per-polygon OBJ files.
  *
- * Each polygon in ProjPolysList is expected to be a polygon object whose
- * vertices lie in the view plane in world coordinates. For each polygon the
- * function will:
- *  - compute local (u,v) coordinates relative to polygon centroid,
- *  - call IritPrsrExtrude2DPointsToSolidDir with Dir = view_forward * Depth,
- *  - translate the extruded solid to the polygon centroid,
- *  - append the solid to the result LIST.
+ * Parameters:
+ *   ProjListPre   - LIST of 2ds obtained with preprocessing (may be NULL)
+ *   ProjListDirect - LIST of 2ds obtained by direct extraction (may be NULL)
+ *   Views        - array of view matrices (NumViews entries)
+ *   NumViews     - number of view matrices / silhouette list elements
+ *   Depth        - extrusion length along the view forward vector
+ *
+ * Behavior mirrors the logic previously embedded in test.c: for every view,
+ * for every polygon in the 2d object, build the polygon's centroid,
+ * compute local (u,v) coordinates, call IritPrsrExtrude2DPointsToSolidDir,
+ * translate the resulting solid to centroid. return a LIST of the resulting
+ * placed solids.
  */
-IPObjectStruct* IritPrsrExtrudeProjectedViewPolys(const IPObjectStruct* ProjPolysList,
-    const IrtHmgnMatType ViewMat,
-    CagdRType Depth)
+IPObjectStruct* IritPrsrExtrudeSilhouetteListsToViewSolids(IPObjectStruct* ProjListPre,
+    IPObjectStruct* ProjListDirect,
+    const IrtHmgnMatType* Views,
+    int NumViews,
+    IrtRType Depth)
 {
-    if (ProjPolysList == NULL ||
-        /* Ensure this is a LIST object with at least one element pointer array. */
-        ProjPolysList->U.Lst.PObjList == NULL ||
-        Depth == 0.0)
+    if ((ProjListPre == NULL && ProjListDirect == NULL) ||
+        Views == NULL || NumViews <= 0 || Depth == 0.0)
         return NULL;
-
-    /* Extract forward vector from ViewMat (third column). */
-    IrtVecType f;
-    f[0] = ViewMat[0][2];
-    f[1] = ViewMat[1][2];
-    f[2] = ViewMat[2][2];
-    {
-        IrtRType flen = sqrt(IRIT_SQR(f[0]) + IRIT_SQR(f[1]) + IRIT_SQR(f[2]));
-        if (flen <= IRIT_EPS) {
-            f[0] = 0.0; f[1] = 0.0; f[2] = 1.0;
-            flen = 1.0;
-        }
-        f[0] /= flen; f[1] /= flen; f[2] /= flen;
-    }
 
     IPObjectStruct* ResList = IritPrsrGenLISTObject(NULL);
     if (ResList == NULL)
         return NULL;
 
-    /* Iterate over list elements (each should be a polygon object). */
-    int i = 0;
-    IPObjectStruct* PObj;
-    while ((PObj = IritPrsrListObjectGet((IPObjectStruct*)(void*)ProjPolysList, i++)) != NULL) {
-        if (!IP_IS_POLY_OBJ(PObj))
+    /* Helper to process a flattened projected list (elements named "proj_{pre|dir}_view%d_poly%03d"). */
+    for (int usePre = 0; usePre < 2; ++usePre) {
+        IPObjectStruct* ProjList = usePre ? ProjListPre : ProjListDirect;
+        if (ProjList == NULL)
             continue;
 
-        /* For each polygon component in this object */
-        for (IPPolygonStruct* Pl = PObj->U.Pl; Pl != NULL; Pl = Pl->Pnext) {
-            IPVertexStruct* V = Pl->PVertex;
-            if (V == NULL)
+        int idx = 0;
+        IPObjectStruct* PObj = NULL;
+        while ((PObj = IritPrsrListObjectGet(ProjList, idx++)) != NULL) {
+            if (!IP_IS_POLY_OBJ(PObj))
                 continue;
 
-            /* Count vertices and collect coords */
-            int n = 0;
-            IPVertexStruct* cur = V;
-            int guard = 0;
-            while (cur != NULL) {
-                ++n;
-                cur = cur->Pnext;
-                if (++guard > 200000) { n = 0; break; }
-                if (cur == V) break;
+            /* Determine source view index from ObjName */
+            int vi = -1, polyIdx = -1;
+            if (PObj->ObjName != NULL) {
+                if (usePre)
+                    sscanf(PObj->ObjName, "proj_pre_view%d_poly%03d", &vi, &polyIdx);
+                else
+                    sscanf(PObj->ObjName, "proj_dir_view%d_poly%03d", &vi, &polyIdx);
             }
-            if (n < 3)
+            /* Fallback: if parsing failed, skip this polygon. */
+            if (vi < 0 || vi >= NumViews)
                 continue;
 
-            IrtPtType* coords = (IrtPtType*)IritMalloc(sizeof(IrtPtType) * n);
-            if (coords == NULL)
-                continue;
-
-            cur = V;
-            int idx = 0;
-            guard = 0;
-            IrtRType cx = 0.0, cy = 0.0, cz = 0.0;
-            while (cur != NULL && idx < n) {
-                coords[idx][0] = cur->Coord[0];
-                coords[idx][1] = cur->Coord[1];
-                coords[idx][2] = cur->Coord[2];
-                cx += coords[idx][0];
-                cy += coords[idx][1];
-                cz += coords[idx][2];
-                ++idx;
-                cur = cur->Pnext;
-                if (++guard > 200000) break;
-                if (cur == V) break;
+            /* Extract view forward vector (third column) and normalize. */
+            IrtVecType f;
+            f[0] = Views[vi][0][2];
+            f[1] = Views[vi][1][2];
+            f[2] = Views[vi][2][2];
+            {
+                IrtRType flen = sqrt(IRIT_SQR(f[0]) + IRIT_SQR(f[1]) + IRIT_SQR(f[2]));
+                if (flen <= IRIT_EPS) {
+                    f[0] = 0.0; f[1] = 0.0; f[2] = 1.0;
+                    flen = 1.0;
+                }
+                f[0] /= flen; f[1] /= flen; f[2] /= flen;
             }
-            if (idx != n) { IritFree(coords); continue; }
 
-            IrtPtType origin;
-            origin[0] = cx / n; origin[1] = cy / n; origin[2] = cz / n;
-
-            /* Build local basis u,v from view forward f (w). */
-            IrtVecType w, u, vtmp;
-            w[0] = f[0]; w[1] = f[1]; w[2] = f[2];
-
-            IrtVecType arb;
-            if (fabs(w[0]) < 0.9) { arb[0] = 1.0; arb[1] = 0.0; arb[2] = 0.0; }
+            /* Build local basis u,v (stable). */
+            IrtVecType arb, u, vtmp;
+            if (fabs(f[0]) < 0.9) { arb[0] = 1.0; arb[1] = 0.0; arb[2] = 0.0; }
             else { arb[0] = 0.0; arb[1] = 1.0; arb[2] = 0.0; }
 
-            u[0] = arb[1] * w[2] - arb[2] * w[1];
-            u[1] = arb[2] * w[0] - arb[0] * w[2];
-            u[2] = arb[0] * w[1] - arb[1] * w[0];
+            u[0] = arb[1] * f[2] - arb[2] * f[1];
+            u[1] = arb[2] * f[0] - arb[0] * f[2];
+            u[2] = arb[0] * f[1] - arb[1] * f[0];
             {
                 IrtRType ul = sqrt(IRIT_SQR(u[0]) + IRIT_SQR(u[1]) + IRIT_SQR(u[2]));
-                if (ul <= IRIT_EPS) { IritFree(coords); continue; }
+                if (ul <= IRIT_EPS) continue;
                 u[0] /= ul; u[1] /= ul; u[2] /= ul;
             }
 
-            vtmp[0] = w[1] * u[2] - w[2] * u[1];
-            vtmp[1] = w[2] * u[0] - w[0] * u[2];
-            vtmp[2] = w[0] * u[1] - w[1] * u[0];
+            vtmp[0] = f[1] * u[2] - f[2] * u[1];
+            vtmp[1] = f[2] * u[0] - f[0] * u[2];
+            vtmp[2] = f[0] * u[1] - f[1] * u[0];
 
-            /* Build 2D pts array relative to origin */
-            IrtE2PtStruct* pts2d = (IrtE2PtStruct*)IritMalloc(sizeof(IrtE2PtStruct) * n);
-            if (pts2d == NULL) { IritFree(coords); continue; }
+            /* For each polygon component inside this projected object (usually one) */
+            for (IPPolygonStruct* Pl = PObj->U.Pl; Pl != NULL; Pl = Pl->Pnext) {
+                IPVertexStruct* V = Pl->PVertex;
+                if (V == NULL)
+                    continue;
 
-            for (int j = 0; j < n; ++j) {
-                IrtRType dx = coords[j][0] - origin[0];
-                IrtRType dy = coords[j][1] - origin[1];
-                IrtRType dz = coords[j][2] - origin[2];
+                /* Count vertices and collect coordinates. */
+                int n = 0;
+                IPVertexStruct* cur = V;
+                int guard = 0;
+                while (cur != NULL) {
+                    ++n;
+                    cur = cur->Pnext;
+                    if (++guard > 200000) { n = 0; break; }
+                    if (cur == V) break;
+                }
+                if (n < 3)
+                    continue;
 
-                pts2d[j].Pt[0] = dx * u[0] + dy * u[1] + dz * u[2];
-                pts2d[j].Pt[1] = dx * vtmp[0] + dy * vtmp[1] + dz * vtmp[2];
-            }
+                IrtPtType* coords = (IrtPtType*)IritMalloc(sizeof(IrtPtType) * n);
+                if (coords == NULL)
+                    continue;
 
-            /* Extrude using view forward scaled by depth */
-            IrtVecType Dir;
-            Dir[0] = (IrtRType)(w[0] * Depth);
-            Dir[1] = (IrtRType)(w[1] * Depth);
-            Dir[2] = (IrtRType)(w[2] * Depth);
+                cur = V;
+                int idxV = 0;
+                guard = 0;
+                IrtRType cx = 0.0, cy = 0.0, cz = 0.0;
+                while (cur != NULL && idxV < n) {
+                    coords[idxV][0] = cur->Coord[0];
+                    coords[idxV][1] = cur->Coord[1];
+                    coords[idxV][2] = cur->Coord[2];
+                    cx += coords[idxV][0];
+                    cy += coords[idxV][1];
+                    cz += coords[idxV][2];
+                    ++idxV;
+                    cur = cur->Pnext;
+                    if (++guard > 200000) break;
+                    if (cur == V) break;
+                }
+                if (idxV != n) { IritFree(coords); continue; }
 
-            IPObjectStruct* Extr = IritPrsrExtrude2DPointsToSolidDir(pts2d, n, Dir);
+                IrtPtType origin;
+                origin[0] = cx / n; origin[1] = cy / n; origin[2] = cz / n;
 
-            IritFree(pts2d);
-            IritFree(coords);
+                /* Build 2D points relative to centroid in the view's (u,v) basis. */
+                IrtE2PtStruct* pts2d = (IrtE2PtStruct*)IritMalloc(sizeof(IrtE2PtStruct) * n);
+                if (pts2d == NULL) { IritFree(coords); continue; }
 
-            if (Extr == NULL)
-                continue;
+                for (int j = 0; j < n; ++j) {
+                    IrtRType dx = coords[j][0] - origin[0];
+                    IrtRType dy = coords[j][1] - origin[1];
+                    IrtRType dz = coords[j][2] - origin[2];
 
-            /* Translate extruded solid to origin */
-            IrtHmgnMatType T;
-            IritMiscMatGenUnitMat(T);
-            T[0][3] = origin[0];
-            T[1][3] = origin[1];
-            T[2][3] = origin[2];
+                    pts2d[j].Pt[0] = dx * u[0] + dy * u[1] + dz * u[2];
+                    pts2d[j].Pt[1] = dx * vtmp[0] + dy * vtmp[1] + dz * vtmp[2];
+                }
 
-            IPObjectStruct* Placed = IritGeomTransformObject(Extr, T);
-            IritPrsrFreeObject(Extr);
+                /* Extrude in view forward direction scaled by Depth. */
+                IrtVecType Dir;
+                Dir[0] = (IrtRType)(f[0] * Depth);
+                Dir[1] = (IrtRType)(f[1] * Depth);
+                Dir[2] = (IrtRType)(f[2] * Depth);
 
-            if (Placed != NULL) {
-                Placed->Pnext = NULL;
-                IritPrsrListObjectAppend(ResList, Placed);
-            }
-        } /* per polygon */
-    } /* per list element */
+                IPObjectStruct* Extr = IritPrsrExtrude2DPointsToSolidDir(pts2d, n, Dir);
+
+                IritFree(pts2d);
+                IritFree(coords);
+
+                if (Extr == NULL)
+                    continue;
+
+                /* Translate extruded solid back to polygon centroid (world). */
+                IrtHmgnMatType T;
+                IritMiscMatGenUnitMat(T);
+                T[0][3] = origin[0];
+                T[1][3] = origin[1];
+                T[2][3] = origin[2];
+
+                IPObjectStruct* Placed = IritGeomTransformObject(Extr, T);
+                IritPrsrFreeObject(Extr);
+
+                if (Placed != NULL) {
+                    /* keep a meaningful ObjName for saving later */
+                    char namebuf[512];
+                    if (usePre)
+                        snprintf(namebuf, sizeof(namebuf), "sil_pre_view%d_poly%03d_extr", vi, polyIdx);
+                    else
+                        snprintf(namebuf, sizeof(namebuf), "sil_dir_view%d_poly%03d_extr", vi, polyIdx);
+
+                    Placed->ObjName = IritMiscStrdup(namebuf);
+                    Placed->Pnext = NULL;
+                    IritPrsrListObjectAppend(ResList, Placed);
+                }
+            } /* per polygon inside PObj */
+        } /* while list elements */
+    } /* for pre/direct */
 
     if (ResList->U.Lst.PObjList == NULL || ResList->U.Lst.ListMaxLen == 0) {
         IritPrsrFreeObject(ResList);
@@ -592,6 +628,7 @@ IPObjectStruct* IritPrsrExtrudeProjectedViewPolys(const IPObjectStruct* ProjPoly
 
     return ResList;
 }
+
 
 /* * Helper: Manually generate a LookAt matrix.
  * This replaces the hypothetical 'IritGeomMatGenLookAt'.
