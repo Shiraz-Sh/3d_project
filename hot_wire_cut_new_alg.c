@@ -14,6 +14,45 @@
 
 #include "prsr_loc.h"
 
+
+
+#include "inc_irit/cagd_lib.h"
+
+IPObjectStruct* IritPrsrExtrude2DPointsToRuledSrf(const IrtE2PtStruct* pts,
+    int n,
+    IrtVecType Dir)
+{
+    int i;
+    CagdCrvStruct* Crv;
+    CagdSrfStruct* Srf;
+    CagdVecStruct CagdDir;
+    IPObjectStruct* SrfObj;
+
+    if (pts == NULL || n < 2) return NULL;
+
+    /* 1. Create a Linear B-spline Curve (Order 2) from your points. */
+    Crv = IritCagdBspCrvNew(n, 2, CAGD_PT_E2_TYPE);
+
+    for (i = 0; i < n; i++) {
+        Crv->Points[1][i] = pts[i].Pt[0];
+        Crv->Points[2][i] = pts[i].Pt[1];
+    }
+
+    /* Use IritCagdBspKnotUniformOpen instead of IritCagdBspKnotUniform. */
+    IritCagdBspKnotUniformOpen(n, 2, Crv->KnotVector);
+
+    /* 2. Prepare the extrusion direction. */
+    for (i = 0; i < 3; i++) CagdDir.Vec[i] = Dir[i];
+
+    /* 3. Extrude the curve to create a mathematical surface. */
+    Srf = IritCagdExtrudeSrf(Crv, &CagdDir);
+    IritCagdCrvFree(Crv);
+
+    /* 4. Wrap into an IRIT Surface Object. */
+    SrfObj = IritPrsrGenSrfObject("ExtrusionSrf", Srf, NULL);
+
+    return SrfObj;
+}
 /*
  * Create a polygon from 2D points and extrude it into a 3D solid.
  *

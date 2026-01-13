@@ -14,6 +14,10 @@
 #include "../prsr_lib/prsr_loc.h"
 /* For IritPrsrHWCDataStruct and friends */
 
+IPObjectStruct* IritPrsrExtrude2DPointsToRuledSrf(const IrtE2PtStruct* pts,
+    int n,
+    IrtVecType Dir);
+
 /* Prototypes for the helpers implemented in prsr_lib/hot_wire_cut_new_alg.c */
 IPObjectStruct* IritPrsrExtrude2DPointsToSolidDir(const IrtE2PtStruct* pts,
     int n,
@@ -43,6 +47,14 @@ void GenLookAtMatrix(IrtVecType Eye, IrtVecType Center, IrtVecType Up, IrtHmgnMa
 
 /* Already in hot_wire_cut.c - ensure prototype visible to the compiler. */
 void IritPrsrHWCSetDfltParams(IritPrsrHWCDataStruct* Data);
+
+void IritPrsrHWCSetDfltParams(IritPrsrHWCDataStruct* Data);
+
+IPObjectStruct* IritPrsrHWCCreatePath(const IPObjectStruct* ModelMainPart,
+    const IPObjectStruct* ModelTopCover,
+    const IPObjectStruct* ModelBottomCover,
+    const char* GCodeOutputFilePath,
+    const IritPrsrHWCDataStruct* Params);
 
 IrtHmgnMatType* SelectBestViewSampling(IPObjectStruct* PObj,
     int NumSamples,
@@ -83,7 +95,22 @@ int main(void)
     IrtVecType extrDir;
     IRIT_PT_RESET(extrDir);
     extrDir[2] = 1.0;
+
+    IritPrsrHWCDataStruct HWCParams;
+    IPObjectStruct* SimPath = NULL;
+    IritPrsrHWCSetDfltParams(&HWCParams);
     IPObjectStruct* Solid = IritPrsrExtrude2DPointsToSolidDir(pts, NumPts, extrDir);
+
+    /* NEW: This returns a Surface object that hot_wire_cut.c can process. */
+    IPObjectStruct* SolidSurf = IritPrsrExtrude2DPointsToRuledSrf(pts, NumPts, extrDir);
+    IritMiscAttrIDSetObjectIntAttrib(SolidSurf, IRIT_ATTR_ID_Dir, CAGD_CONST_V_DIR); // I don't know if this is fine
+    if (SolidSurf != NULL) {
+        /* Now this call will generate GCode instead of skipping labels. */
+        SimPath = IritPrsrHWCCreatePath(SolidSurf, NULL, NULL, "output.gcode", &HWCParams);
+        if (SimPath != NULL) {
+            printf("GCode generated. Simulation contains %d paths. \n", CountListObjects(SimPath));
+        }
+    }
     if (Solid == NULL) {
         fprintf(stderr, "Failed to create test solid.\n");
         return 1;
@@ -192,6 +219,7 @@ int main(void)
     IritPrsrFreeObject(SilListDirect);
     IritPrsrFreeObject(Solid);
     IritPrsrFreeObject(SolList);
+    IritPrsrFreeObject(SolidSurf);
 
     printf("Direct-only silhouette test completed.\n");
     return 0;
