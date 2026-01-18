@@ -96,21 +96,21 @@ int main(void)
     IRIT_PT_RESET(extrDir);
     extrDir[2] = 1.0;
 
-    IritPrsrHWCDataStruct HWCParams;
-    IPObjectStruct* SimPath = NULL;
-    IritPrsrHWCSetDfltParams(&HWCParams);
+    //IritPrsrHWCDataStruct HWCParams;
+    //IPObjectStruct* SimPath = NULL;
+    //IritPrsrHWCSetDfltParams(&HWCParams);
     IPObjectStruct* Solid = IritPrsrExtrude2DPointsToSolidDir(pts, NumPts, extrDir);
 
     /* NEW: This returns a Surface object that hot_wire_cut.c can process. */
-    IPObjectStruct* SolidSurf = IritPrsrExtrude2DPointsToRuledSrf(pts, NumPts, extrDir);
-    IritMiscAttrIDSetObjectIntAttrib(SolidSurf, IRIT_ATTR_ID_Dir, CAGD_CONST_V_DIR); // I don't know if this is fine
-    if (SolidSurf != NULL) {
-        /* Now this call will generate GCode instead of skipping labels. */
-        SimPath = IritPrsrHWCCreatePath(SolidSurf, NULL, NULL, "output.gcode", &HWCParams);
-        if (SimPath != NULL) {
-            printf("GCode generated. Simulation contains %d paths. \n", CountListObjects(SimPath));
-        }
-    }
+    //IPObjectStruct* SolidSurf = IritPrsrExtrude2DPointsToRuledSrf(pts, NumPts, extrDir);
+    //IritMiscAttrIDSetObjectIntAttrib(SolidSurf, IRIT_ATTR_ID_Dir, CAGD_CONST_V_DIR); // I don't know if this is fine
+    //if (SolidSurf != NULL) {
+    //    /* Now this call will generate GCode instead of skipping labels. */
+    //    SimPath = IritPrsrHWCCreatePath(SolidSurf, NULL, NULL, "output.gcode", &HWCParams);
+    //    if (SimPath != NULL) {
+    //        printf("GCode generated. Simulation contains %d paths. \n", CountListObjects(SimPath));
+    //    }
+    //}
     if (Solid == NULL) {
         fprintf(stderr, "Failed to create test solid.\n");
         return 1;
@@ -183,7 +183,7 @@ int main(void)
         IPObjectStruct* P = NULL;
         while ((P = IritPrsrListObjectGet(ProjDir, pidx)) != NULL) {
             /* If ObjName was set by projector, use it; otherwise use index-based name. */
-            const char *base = P->ObjName ? P->ObjName : "dir_proj_poly";
+            const char* base = P->ObjName ? P->ObjName : "dir_proj_poly";
             snprintf(fname, sizeof(fname), "%s.obj", base);
             if (!IritPrsrOBJSaveFile(P, fname, FALSE, 0, 0))
                 fprintf(stderr, "Failed saving %s\n", fname);
@@ -214,12 +214,80 @@ int main(void)
         }
     }
 
+    /* 6. GCode Generation Block (Only added here at the end). */
+    if (SolList != NULL) {
+        IritPrsrHWCDataStruct HWCParams;
+        IritPrsrHWCSetDfltParams(&HWCParams);
+        /* Adjust parameters to clear the machine bed and avoid Z bound errors. */
+        HWCParams.MinimalHeight = 20.0;
+        HWCParams.RuledApproxDir = CAGD_CONST_V_DIR;
+
+        int sidx = 0;
+        IPObjectStruct* S = NULL;
+        while ((S = IritPrsrListObjectGet(SolList, sidx++)) != NULL) {
+            int vi, pi;
+            /* Map the extruded solid back to its source projection polygon. */
+            if (S->ObjName && sscanf(S->ObjName, "sil_dir_view%d_poly%03d_extr", &vi, &pi) == 2) {
+                char search[256], gcname[1024];
+                snprintf(search, sizeof(search), "proj_dir_view%d_poly%03d", vi, pi);
+                IPObjectStruct* P = NULL;
+                for (int j = 0; (P = IritPrsrListObjectGet(ProjDir, j)) != NULL; j++) {
+                    if (P->ObjName && strcmp(P->ObjName, search) == 0) break;
+                }
+
+                if (P && IP_IS_POLY_OBJ(P)) {
+                    /* Create a surface representation required for HWC ruling calculations. */
+                    int n = IritPrsrVrtxListLen(P->U.Pl->PVertex);
+                    CagdCrvStruct* Crv = IritCagdBspCrvNew(n, 2, CAGD_PT_E3_TYPE);
+                    IPVertexStruct* V = P->U.Pl->PVertex;
+                    for (int k = 0; k < n; k++, V = V->Pnext) {
+                        Crv->Points[1][k] = V->Coord[0];
+                        Crv->Points[2][k] = V->Coord[1];
+                        /* Lift the object by 100mm to move it into positive machine Z space. */
+                        Crv->Points[3][k] = V->Coord[2] + 100.0;
+                    }
+                    IritCagdBspKnotUniformOpen(n, 2, Crv->KnotVector);
+
+                    CagdVecStruct Dir;
+					IrtRType Depth = 10.0; /* Extrusion depth for HWC simulation. */
+                    Dir.Vec[0] = Views[vi][0][2] * Depth;
+                    Dir.Vec[1] = Views[vi][1][2] * Depth;
+                    Dir.Vec[2] = Views[vi][2][2] * Depth;
+
+                    CagdSrfStruct* Srf = IritCagdExtrudeSrf(Crv, &Dir);
+                    IPObjectStruct* TempSrfObj = IritPrsrGenSrfObject("temp", Srf, NULL);
+                    IritMiscAttrIDSetObjectIntAttrib(TempSrfObj, IRIT_ATTR_ID_Dir, CAGD_CONST_V_DIR);
+
+                    snprintf(gcname, sizeof(gcname), "%s.gcode", S->ObjName);
+                    IPObjectStruct* Sim = IritPrsrHWCCreatePath(TempSrfObj, NULL, NULL, gcname, &HWCParams);
+                    if (Sim) {
+                        printf("GCode successfully written to: %s\n", gcname);
+                        IritPrsrFreeObject(Sim);
+                    }
+                                    else {
+                    printf("This is some wierd object I can't cut\n");
+                    }
+
+                    IritPrsrFreeObject(TempSrfObj);
+                    IritCagdCrvFree(Crv);
+                }
+                else {
+                    printf("This is some wierd object I can't cut\n");
+                }
+
+            }
+        }
+    }
+
+    /* Cleanup allocated IRIT objects. */
+
+
     /* Cleanup */
     IritPrsrFreeObject(ProjDir);
     IritPrsrFreeObject(SilListDirect);
     IritPrsrFreeObject(Solid);
     IritPrsrFreeObject(SolList);
-    IritPrsrFreeObject(SolidSurf);
+    //IritPrsrFreeObject(SolidSurf);
 
     printf("Direct-only silhouette test completed.\n");
     return 0;
