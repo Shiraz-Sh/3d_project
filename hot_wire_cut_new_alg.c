@@ -15,8 +15,184 @@
 #include "prsr_loc.h"
 
 
-
 #include "inc_irit/cagd_lib.h"
+
+
+/* --------------------------------------------------------------------------
+ * Helper: build a stable orthonormal basis (u,v,w) given a view matrix.
+ *
+ * Inputs:
+ *   Mat         - 4x4 view matrix; the "forward" vector is taken from Mat[*][2].
+ *   AllowDefault - if nonzero, on degenerate forward vector the helper will
+ *                  substitute w=(0,0,1) and continue (fallback). Otherwise
+ *                  function returns 0 for failure.
+ *
+ * Outputs:
+ *   u, v, w     - computed orthonormal basis (all three are written).
+ *
+ * Return:
+ *   1 on success, 0 on failure (and u/v/w contents are undefined unless
+ *   AllowDefault was used and returned 1).
+ *
+ * Rationale:
+ *   Both `IritPrsrProjectSilhouetteToViewPolys` and
+ *   `IritPrsrExtrudeSilhouetteListsToViewSolids` contain identical logic to
+ *   extract the view-forward vector and build a stable (u,v) basis. Centralize
+ *   that logic here to avoid duplication and to make maintenance simpler.
+ * ------------------------------------------------------------------------ */
+static int IritPrsrBuildViewBasisFromMat(const IrtHmgnMatType Mat,
+    IrtVecType u,
+    IrtVecType v,
+    IrtVecType w,
+    int AllowDefault)
+{
+    IrtVecType arb;
+    IrtRType wlen, ul;
+
+    /* Extract forward vector from third *row* of matrix (Mat[2][0..2]).
+       The view/LookAt code in this file stores rotation in rows, so the
+       forward vector is on row index 2. */
+    w[0] = Mat[2][0];
+    w[1] = Mat[2][1];
+    w[2] = Mat[2][2];
+
+    wlen = sqrt(IRIT_SQR(w[0]) + IRIT_SQR(w[1]) + IRIT_SQR(w[2]));
+    if (wlen <= IRIT_EPS) {
+        if (!AllowDefault)
+            return 0;
+        /* fallback to canonical forward if allowed */
+        w[0] = 0.0; w[1] = 0.0; w[2] = 1.0;
+    }
+    else {
+        w[0] /= wlen; w[1] /= wlen; w[2] /= wlen;
+    }
+
+    /* Choose stable arbitrary vector not parallel to w */
+    if (fabs(w[0]) < 0.9) { arb[0] = 1.0; arb[1] = 0.0; arb[2] = 0.0; }
+    else { arb[0] = 0.0; arb[1] = 1.0; arb[2] = 0.0; }
+
+    /* u = normalize(cross(arb, w)) */
+    u[0] = arb[1] * w[2] - arb[2] * w[1];
+    u[1] = arb[2] * w[0] - arb[0] * w[2];
+    u[2] = arb[0] * w[1] - arb[1] * w[0];
+
+    ul = sqrt(IRIT_SQR(u[0]) + IRIT_SQR(u[1]) + IRIT_SQR(u[2]));
+    if (ul <= IRIT_EPS) {
+        /* extremely unlikely; if allowed try a different arb, else fail. */
+        if (!AllowDefault)
+            return 0;
+        /* try fallback arb */
+        arb[0] = 0.0; arb[1] = 1.0; arb[2] = 0.0;
+        u[0] = arb[1] * w[2] - arb[2] * w[1];
+        u[1] = arb[2] * w[0] - arb[0] * w[2];
+        u[2] = arb[0] * w[1] - arb[1] * w[0];
+        ul = sqrt(IRIT_SQR(u[0]) + IRIT_SQR(u[1]) + IRIT_SQR(u[2]));
+        if (ul <= IRIT_EPS)
+            return 0;
+    }
+
+    u[0] /= ul; u[1] /= ul; u[2] /= ul;
+
+    /* v = cross(w, u) */
+    v[0] = w[1] * u[2] - w[2] * u[1];
+    v[1] = w[2] * u[0] - w[0] * u[2];
+    v[2] = w[0] * u[1] - w[1] * u[0];
+
+    return 1;
+}
+
+
+
+/* Helper: collect polygon vertices into an array, remove duplicate closing
+ * vertex if it equals the first within IRIT_EPS, and compute centroid.
+ *
+ * Inputs:
+ *   V      - pointer to a polygon vertex circular list (may be NULL).
+ *   outN   - pointer to receive number of vertices returned (0 on failure/degenerate).
+ *   origin - optional pointer to receive centroid (may be NULL).
+ *
+ * Returns:
+ *   Allocated array of `IrtPtType` with `*outN` entries on success. Caller must IritFree()
+ *   the returned array. Returns NULL and sets *outN = 0 on failure or degenerate polygon.
+ */
+static IrtPtType* CollectPolygonCoordsAndCentroid(const IPVertexStruct* V,
+    int* outN,
+    IrtPtType origin)
+{
+    int n = 0;
+    *outN = 0;
+    if (V == NULL)
+        return NULL;
+
+    /* Count vertices (guard against corrupted lists). */
+    const IPVertexStruct* cur = V;
+    int guard = 0;
+    do {
+        ++n;
+        cur = cur->Pnext;
+        if (++guard > 200000) { n = 0; break; }
+    } while (cur != NULL && cur != V);
+
+    if (n <= 0)
+        return NULL;
+
+    /* Collect coordinates. */
+    IrtPtType* coords = (IrtPtType*)IritMalloc(sizeof(IrtPtType) * n);
+    if (coords == NULL)
+        return NULL;
+
+    cur = V;
+    guard = 0;
+    int idx = 0;
+    while (cur != NULL && idx < n) {
+        coords[idx][0] = cur->Coord[0];
+        coords[idx][1] = cur->Coord[1];
+        coords[idx][2] = cur->Coord[2];
+        ++idx;
+        cur = cur->Pnext;
+        if (++guard > 200000) break;
+        if (cur == V) break;
+    }
+    if (idx != n) {
+        IritFree(coords);
+        return NULL;
+    }
+
+    /* Sanitize: if last equals first (within IRIT_EPS) drop last. */
+    if (n > 1) {
+        IrtRType dx = coords[n - 1][0] - coords[0][0];
+        IrtRType dy = coords[n - 1][1] - coords[0][1];
+        IrtRType dz = coords[n - 1][2] - coords[0][2];
+        if ((dx * dx + dy * dy + dz * dz) <= IRIT_SQR(IRIT_EPS)) {
+            --n;
+        }
+    }
+
+    /* Need at least 3 distinct vertices to form polygon. */
+    if (n < 3) {
+        IritFree(coords);
+        return NULL;
+    }
+
+    /* Compute centroid of the remaining vertices. */
+    if (origin != NULL) {
+        IrtRType cx = 0.0, cy = 0.0, cz = 0.0;
+        for (int i = 0; i < n; ++i) {
+            cx += coords[i][0];
+            cy += coords[i][1];
+            cz += coords[i][2];
+        }
+        origin[0] = cx / n;
+        origin[1] = cy / n;
+        origin[2] = cz / n;
+    }
+
+    *outN = n;
+    return coords;
+}
+
+
+/* ----------------- existing functions (unchanged except for basis usage)  */
 
 IPObjectStruct* IritPrsrExtrude2DPointsToRuledSrf(const IrtE2PtStruct* pts,
     int n,
@@ -288,191 +464,441 @@ IPObjectStruct* IritPrsrGetSilhouettesForViews(const IPObjectStruct* PObj,
  * Replace previous implementation that didn't set ObjName so extrusion step can map each projected
  * polygon to its originating view.
  */
- IPObjectStruct* IritPrsrProjectSilhouetteToViewPolys(const IPObjectStruct* SilList,
-         const IrtHmgnMatType* ViewMats,
-         int NumViews,
-         int IsPre)
- {
-     if (SilList == NULL || ViewMats == NULL || NumViews <= 0)
-         return NULL;
+//IPObjectStruct* IritPrsrProjectSilhouetteToViewPolys(const IPObjectStruct* SilList,
+//    const IrtHmgnMatType* ViewMats,
+//    int NumViews,
+//    int IsPre)
+//{
+//    if (SilList == NULL || ViewMats == NULL || NumViews <= 0)
+//        return NULL;
+//
+//    IPObjectStruct* ResList = IritPrsrGenLISTObject(NULL);
+//    if (ResList == NULL)
+//        return NULL;
+//
+//    for (int vi = 0; vi < NumViews; ++vi) {
+//        IPObjectStruct* SilObj = IritPrsrListObjectGet((IPObjectStruct*)(void*)SilList, vi);
+//        if (SilObj == NULL || !IP_IS_POLY_OBJ(SilObj))
+//            continue;
+//
+//        /* Build stable orthonormal basis u,v,w from view matrix (no fallback). */
+//        IrtVecType u, v, w;
+//        if (!IritPrsrBuildViewBasisFromMat(ViewMats[vi], u, v, w, 0))
+//            continue;
+//
+//        /* For each silhouette polygon, create a projected closed polygon lying on the view plane.
+//           Implementation uses 4x4 local transform (world -> [u,v,w] local coords with origin)
+//           and its inverse. We project by setting local z = 0, then transform back. */
+//        int polyIdx = 0;
+//        for (IPPolygonStruct* Pl = SilObj->U.Pl; Pl != NULL; Pl = Pl->Pnext, ++polyIdx) {
+//            IPVertexStruct* V = Pl->PVertex;
+//            if (V == NULL)
+//                continue;
+//
+//            /* Count vertices. */
+//            int n = 0;
+//            IPVertexStruct* cur = V;
+//            int guard = 0;
+//            while (cur != NULL) {
+//                ++n;
+//                cur = cur->Pnext;
+//                if (++guard > 200000) { n = 0; break; }
+//                if (cur == V) break;
+//            }
+//            if (n < 3)
+//                continue;
+//
+//            /* Collect coords and centroid (origin). */
+//            IrtPtType* coords = (IrtPtType*)IritMalloc(sizeof(IrtPtType) * n);
+//            if (coords == NULL)
+//                continue;
+//
+//            cur = V;
+//            int idx = 0;
+//            guard = 0;
+//            IrtRType cx = 0.0, cy = 0.0, cz = 0.0;
+//            while (cur != NULL && idx < n) {
+//                coords[idx][0] = cur->Coord[0];
+//                coords[idx][1] = cur->Coord[1];
+//                coords[idx][2] = cur->Coord[2];
+//                cx += coords[idx][0];
+//                cy += coords[idx][1];
+//                cz += coords[idx][2];
+//                ++idx;
+//                cur = cur->Pnext;
+//                if (++guard > 200000) break;
+//                if (cur == V) break;
+//            }
+//            if (idx != n) { IritFree(coords); continue; }
+//
+//            IrtPtType origin;
+//            origin[0] = cx / n; origin[1] = cy / n; origin[2] = cz / n;
+//
+//            /* Build world->local matrix MatLocal:
+//               MatLocal * P_world = [ dot(u,P)-dot(u,origin),
+//                                      dot(v,P)-dot(v,origin),
+//                                      dot(w,P)-dot(w,origin) ]
+//               last row stays unit for homogenous point transform.
+//            */
+//            IrtHmgnMatType MatLocal, InvMat;
+//            IritMiscMatGenUnitMat(MatLocal);
+//
+//            MatLocal[0][0] = u[0]; MatLocal[0][1] = u[1]; MatLocal[0][2] = u[2];
+//            MatLocal[0][3] = -(u[0] * origin[0] + u[1] * origin[1] + u[2] * origin[2]);
+//
+//            MatLocal[1][0] = v[0]; MatLocal[1][1] = v[1]; MatLocal[1][2] = v[2];
+//            MatLocal[1][3] = -(v[0] * origin[0] + v[1] * origin[1] + v[2] * origin[2]);
+//
+//            MatLocal[2][0] = w[0]; MatLocal[2][1] = w[1]; MatLocal[2][2] = w[2];
+//            MatLocal[2][3] = -(w[0] * origin[0] + w[1] * origin[1] + w[2] * origin[2]);
+//
+//            MatLocal[3][0] = 0.0;  MatLocal[3][1] = 0.0;  MatLocal[3][2] = 0.0; MatLocal[3][3] = 1.0;
+//
+//            if (!IritMiscMatInverseMatrix(MatLocal, InvMat)) {
+//                IritFree(coords);
+//                continue;
+//            }
+//
+//            /* Create new polygon and vertex list from projected points (z=0 in local coords). */
+//            IPPolygonStruct* NewPl = IritPrsrAllocPolygon(0, NULL, NULL);
+//            IPVertexStruct* FirstV = NULL;
+//            IPVertexStruct* PrevV = NULL;
+//
+//            for (int j = 0; j < n; ++j) {
+//                IrtPtType localP;
+//                IritMiscMatMultPtby4by4(localP, coords[j], MatLocal);
+//
+//                /* Project into view plane by zeroing local z. */
+//                localP[2] = 0.0;
+//
+//                /* Map back to world coordinates. */
+//                IrtPtType worldProj;
+//                IritMiscMatMultPtby4by4(worldProj, localP, InvMat);
+//
+//                /* Allocate and link vertex. */
+//                IPVertexStruct* NV = IritPrsrAllocVertex2(NULL);
+//                NV->Coord[0] = worldProj[0];
+//                NV->Coord[1] = worldProj[1];
+//                NV->Coord[2] = worldProj[2];
+//
+//                if (FirstV == NULL) {
+//                    FirstV = PrevV = NV;
+//                }
+//                else {
+//                    PrevV->Pnext = NV;
+//                    PrevV = NV;
+//                }
+//            }
+//
+//            /* Close loop and attach polygon. */
+//            PrevV->Pnext = FirstV;
+//            NewPl->PVertex = FirstV;
+//
+//            IritPrsrUpdatePolyPlane(NewPl);
+//
+//            IPObjectStruct* PolyObj = IritPrsrGenPOLYObject(NewPl);
+//            if (PolyObj != NULL) {
+//                IP_SET_POLYGON_OBJ(PolyObj);
+//                PolyObj->Pnext = NULL;
+//
+//                /* Set name encoding view and polygon index so extrusion step knows the view. */
+//                char namebuf[256];
+//                if (IsPre)
+//                    snprintf(namebuf, sizeof(namebuf), "proj_pre_view%d_poly%03d", vi, polyIdx);
+//                else
+//                    snprintf(namebuf, sizeof(namebuf), "proj_dir_view%d_poly%03d", vi, polyIdx);
+//
+//                PolyObj->ObjName = IritMiscStrdup(namebuf);
+//
+//                IritPrsrListObjectAppend(ResList, PolyObj);
+//            }
+//
+//            IritFree(coords);
+//        } /* per polygon */
+//    } /* per view */
+//
+//    if (ResList->U.Lst.PObjList == NULL || ResList->U.Lst.ListMaxLen == 0) {
+//        IritPrsrFreeObject(ResList);
+//        return NULL;
+//    }
+//
+//    return ResList;
+//}
 
-     IPObjectStruct* ResList = IritPrsrGenLISTObject(NULL);
-     if (ResList == NULL)
-         return NULL;
 
-     for (int vi = 0; vi < NumViews; ++vi) {
-         IPObjectStruct* SilObj = IritPrsrListObjectGet((IPObjectStruct*)(void*)SilList, vi);
-         if (SilObj == NULL || !IP_IS_POLY_OBJ(SilObj))
-             continue;
 
-         /* Extract forward vector (w) from ViewMat (third column) and normalize. */
-         IrtVecType w;
-         w[0] = ViewMats[vi][0][2];
-         w[1] = ViewMats[vi][1][2];
-         w[2] = ViewMats[vi][2][2];
-         {
-             IrtRType wlen = sqrt(IRIT_SQR(w[0]) + IRIT_SQR(w[1]) + IRIT_SQR(w[2]));
-             if (wlen <= IRIT_EPS)
-                 continue;
-             w[0] /= wlen; w[1] /= wlen; w[2] /= wlen;
-         }
 
-         /* Build stable orthonormal basis u,v from w. */
-         IrtVecType arb, u, v;
-         if (fabs(w[0]) < 0.9) { arb[0] = 1.0; arb[1] = 0.0; arb[2] = 0.0; }
-         else { arb[0] = 0.0; arb[1] = 1.0; arb[2] = 0.0; }
+/*
+ * PerformBooleanUnion - use IRIT native boolean (IritBooleanOR) to union
+ * a LIST of polygon objects. Takes ownership of `ListOfPolys`.
+ *
+ * Behavior:
+ *  - If Clist is not a LIST or contains <= 1 element, returns the input unchanged.
+ *  - Otherwise, performs sequential union: accum = OR(accum, next).
+ *  - On success returns a new LIST object whose elements are the resulting
+ *    (possibly multiple) polygon objects produced by the union.
+ *  - On failure returns the original `ListOfPolys` (no objects freed).
+ *
+ * Note: This implementation relies on existing IRIT boolean API found in
+ * bool_lib (IritBooleanOR / IritBoolean2D). It uses the IRIT helper
+ * routines already present in the code base.
+ */
+static IPObjectStruct* PerformBooleanUnion(IPObjectStruct* ListOfPolys)
+{
+    int i, cnt = 0;
 
-         u[0] = arb[1] * w[2] - arb[2] * w[1];
-         u[1] = arb[2] * w[0] - arb[0] * w[2];
-         u[2] = arb[0] * w[1] - arb[1] * w[0];
-         {
-             IrtRType ul = sqrt(IRIT_SQR(u[0]) + IRIT_SQR(u[1]) + IRIT_SQR(u[2]));
-             if (ul <= IRIT_EPS) continue;
-             u[0] /= ul; u[1] /= ul; u[2] /= ul;
-         }
+    if (ListOfPolys == NULL)
+        return NULL;
 
-         v[0] = w[1] * u[2] - w[2] * u[1];
-         v[1] = w[2] * u[0] - w[0] * u[2];
-         v[2] = w[0] * u[1] - w[1] * u[0];
+    /* Only operate on LIST objects. If not a list, nothing to do. */
+    if (ListOfPolys->ObjType != IP_OBJ_LIST_OBJ)
+        return ListOfPolys;
 
-         /* For each silhouette polygon, create a projected closed polygon lying on the view plane.
-            Implementation uses 4x4 local transform (world -> [u,v,w] local coords with origin)
-            and its inverse. We project by setting local z = 0, then transform back. */
-         int polyIdx = 0;
-         for (IPPolygonStruct* Pl = SilObj->U.Pl; Pl != NULL; Pl = Pl->Pnext, ++polyIdx) {
-             IPVertexStruct* V = Pl->PVertex;
-             if (V == NULL)
-                 continue;
+    /* Count elements in the list. */
+    while (IritPrsrListObjectGet(ListOfPolys, cnt) != NULL)
+        ++cnt;
 
-             /* Count vertices. */
-             int n = 0;
-             IPVertexStruct* cur = V;
-             int guard = 0;
-             while (cur != NULL) {
-                 ++n;
-                 cur = cur->Pnext;
-                 if (++guard > 200000) { n = 0; break; }
-                 if (cur == V) break;
-             }
-             if (n < 3)
-                 continue;
+    if (cnt <= 1) /* nothing to union */
+        return ListOfPolys;
 
-             /* Collect coords and centroid (origin). */
-             IrtPtType* coords = (IrtPtType*)IritMalloc(sizeof(IrtPtType) * n);
-             if (coords == NULL)
-                 continue;
+    /* Initialize accumulator with a copy of the first polygon object. */
+    IPObjectStruct* first = IritPrsrListObjectGet(ListOfPolys, 0);
+    if (first == NULL)
+        return ListOfPolys;
 
-             cur = V;
-             int idx = 0;
-             guard = 0;
-             IrtRType cx = 0.0, cy = 0.0, cz = 0.0;
-             while (cur != NULL && idx < n) {
-                 coords[idx][0] = cur->Coord[0];
-                 coords[idx][1] = cur->Coord[1];
-                 coords[idx][2] = cur->Coord[2];
-                 cx += coords[idx][0];
-                 cy += coords[idx][1];
-                 cz += coords[idx][2];
-                 ++idx;
-                 cur = cur->Pnext;
-                 if (++guard > 200000) break;
-                 if (cur == V) break;
-             }
-             if (idx != n) { IritFree(coords); continue; }
+    IPObjectStruct* accum = IritPrsrCopyObject(NULL, first, TRUE);
+    if (accum == NULL)
+        return ListOfPolys;
 
-             IrtPtType origin;
-             origin[0] = cx / n; origin[1] = cy / n; origin[2] = cz / n;
+    /* Sequentially union each subsequent element into accum using IritBooleanOR. */
+    for (i = 1; i < cnt; ++i) {
+        IPObjectStruct* elem = IritPrsrListObjectGet(ListOfPolys, i);
+        if (elem == NULL)
+            continue;
 
-             /* Build world->local matrix MatLocal:
-                MatLocal * P_world = [ dot(u,P)-dot(u,origin),
-                                       dot(v,P)-dot(v,origin),
-                                       dot(w,P)-dot(w,origin) ]
-                last row stays unit for homogenous point transform.
-             */
-             IrtHmgnMatType MatLocal, InvMat;
-             IritMiscMatGenUnitMat(MatLocal);
+        IPObjectStruct* newAccum = IritBooleanOR(accum, elem);
+        /* IritBooleanOR returns a newly allocated object (or NULL on failure). */
+        IritPrsrFreeObject(accum);
+        accum = newAccum;
 
-             MatLocal[0][0] = u[0]; MatLocal[0][1] = u[1]; MatLocal[0][2] = u[2];
-             MatLocal[0][3] = -(u[0] * origin[0] + u[1] * origin[1] + u[2] * origin[2]);
+        if (accum == NULL) {
+            /* Failure: leave original list intact. */
+            return ListOfPolys;
+        }
+    }
 
-             MatLocal[1][0] = v[0]; MatLocal[1][1] = v[1]; MatLocal[1][2] = v[2];
-             MatLocal[1][3] = -(v[0] * origin[0] + v[1] * origin[1] + v[2] * origin[2]);
+    /* Convert accum (which is an IP_OBJ_POLY with possibly multiple polygons)
+       into a LIST of polygon objects. */
+    IPObjectStruct* OutList = IritPrsrGenLISTObject(NULL);
+    if (OutList == NULL) {
+        IritPrsrFreeObject(accum);
+        return ListOfPolys;
+    }
 
-             MatLocal[2][0] = w[0]; MatLocal[2][1] = w[1]; MatLocal[2][2] = w[2];
-             MatLocal[2][3] = -(w[0] * origin[0] + w[1] * origin[1] + w[2] * origin[2]);
+    IPPolygonStruct* Pl = accum->U.Pl;
+    while (Pl != NULL) {
+        IPPolygonStruct* NextPl = Pl->Pnext;
+        Pl->Pnext = NULL; /* detach single polygon */
 
-             MatLocal[3][0] = 0.0;  MatLocal[3][1] = 0.0;  MatLocal[3][2] = 0.0; MatLocal[3][3] = 1.0;
+        IPObjectStruct* PolyObj = IritPrsrGenPOLYObject(Pl);
+        if (PolyObj != NULL) {
+            IP_SET_POLYGON_OBJ(PolyObj);
+            PolyObj->Pnext = NULL;
+            IritPrsrListObjectAppend(OutList, PolyObj);
+        }
+        else {
+            /* If creation failed, free detached polygon (defensive). */
+            IritPrsrFreePolygonList(Pl);
+        }
 
-             if (!IritMiscMatInverseMatrix(MatLocal, InvMat)) {
-                 IritFree(coords);
-                 continue;
-             }
+        Pl = NextPl;
+    }
 
-             /* Create new polygon and vertex list from projected points (z=0 in local coords). */
-             IPPolygonStruct* NewPl = IritPrsrAllocPolygon(0, NULL, NULL);
-             IPVertexStruct* FirstV = NULL;
-             IPVertexStruct* PrevV = NULL;
+    /* Prevent accum destructor from freeing polygons we moved. */
+    accum->U.Pl = NULL;
+    IritPrsrFreeObject(accum);
 
-             for (int j = 0; j < n; ++j) {
-                 IrtPtType localP;
-                 IritMiscMatMultPtby4by4(localP, coords[j], MatLocal);
+    /* Free original input list (we took ownership). */
+    IritPrsrFreeObject(ListOfPolys);
 
-                 /* Project into view plane by zeroing local z. */
-                 localP[2] = 0.0;
+    /* If union produced nothing, clean up and return NULL. */
+    if (OutList->U.Lst.PObjList == NULL || OutList->U.Lst.ListMaxLen == 0) {
+        IritPrsrFreeObject(OutList);
+        return NULL;
+    }
 
-                 /* Map back to world coordinates. */
-                 IrtPtType worldProj;
-                 IritMiscMatMultPtby4by4(worldProj, localP, InvMat);
+    return OutList;
+}
 
-                 /* Allocate and link vertex. */
-                 IPVertexStruct* NV = IritPrsrAllocVertex2(NULL);
-                 NV->Coord[0] = worldProj[0];
-                 NV->Coord[1] = worldProj[1];
-                 NV->Coord[2] = worldProj[2];
+// Modified projection function: accumulate per-view polygons into TempList,
+   //run PerformBooleanUnion on the collected list and append only the union
+   //result's elements to ResList. 
+IPObjectStruct* IritPrsrProjectSilhouetteToViewPolys(const IPObjectStruct* SilList,
+    const IrtHmgnMatType* ViewMats,
+    int NumViews,
+    int IsPre)
+{
+    if (SilList == NULL || ViewMats == NULL || NumViews <= 0)
+        return NULL;
 
-                 if (FirstV == NULL) {
-                     FirstV = PrevV = NV;
-                 }
-                 else {
-                     PrevV->Pnext = NV;
-                     PrevV = NV;
-                 }
-             }
+    IPObjectStruct* ResList = IritPrsrGenLISTObject(NULL);
+    if (ResList == NULL)
+        return NULL;
 
-             /* Close loop and attach polygon. */
-             PrevV->Pnext = FirstV;
-             NewPl->PVertex = FirstV;
+    for (int vi = 0; vi < NumViews; ++vi) {
+        IPObjectStruct* SilObj = IritPrsrListObjectGet((IPObjectStruct*)(void*)SilList, vi);
+        if (SilObj == NULL || !IP_IS_POLY_OBJ(SilObj))
+            continue;
 
-             IritPrsrUpdatePolyPlane(NewPl);
+        /* Build stable orthonormal basis u,v,w from view matrix (no fallback). */
+        IrtVecType u, v, w;
+        if (!IritPrsrBuildViewBasisFromMat(ViewMats[vi], u, v, w, 0))
+            continue;
 
-             IPObjectStruct* PolyObj = IritPrsrGenPOLYObject(NewPl);
-             if (PolyObj != NULL) {
-                 IP_SET_POLYGON_OBJ(PolyObj);
-                 PolyObj->Pnext = NULL;
+        /* Temporary list to collect projected polygons for this view.*/
+        IPObjectStruct* TempList = IritPrsrGenLISTObject(NULL);
+        if (TempList == NULL)
+            continue;
 
-                 /* Set name encoding view and polygon index so extrusion step knows the view. */
-                 char namebuf[256];
-                 if (IsPre)
-                     snprintf(namebuf, sizeof(namebuf), "proj_pre_view%d_poly%03d", vi, polyIdx);
-                 else
-                     snprintf(namebuf, sizeof(namebuf), "proj_dir_view%d_poly%03d", vi, polyIdx);
+        /* For each silhouette polygon, create a projected closed polygon lying on the view plane. */
+        int polyIdx = 0;
+        for (IPPolygonStruct* Pl = SilObj->U.Pl; Pl != NULL; Pl = Pl->Pnext, ++polyIdx) {
+            IPVertexStruct* V = Pl->PVertex;
+            if (V == NULL)
+                continue;
 
-                 PolyObj->ObjName = IritMiscStrdup(namebuf);
+            /* Use helper to collect, sanitize duplicate closing vertex and compute centroid. */
+            IrtPtType origin;
+            int n;
+            IrtPtType* coords = CollectPolygonCoordsAndCentroid(V, &n, origin);
+            if (coords == NULL || n < 3)
+                continue;
 
-                 IritPrsrListObjectAppend(ResList, PolyObj);
-             }
+            /* Build world->local matrix MatLocal and its inverse.*/
+            IrtHmgnMatType MatLocal, InvMat;
+            IritMiscMatGenUnitMat(MatLocal);
 
-             IritFree(coords);
-         } /* per polygon */
-     } /* per view */
+            MatLocal[0][0] = u[0]; MatLocal[0][1] = u[1]; MatLocal[0][2] = u[2];
+            MatLocal[0][3] = -(u[0] * origin[0] + u[1] * origin[1] + u[2] * origin[2]);
 
-     if (ResList->U.Lst.PObjList == NULL || ResList->U.Lst.ListMaxLen == 0) {
-         IritPrsrFreeObject(ResList);
-         return NULL;
-     }
+            MatLocal[1][0] = v[0]; MatLocal[1][1] = v[1]; MatLocal[1][2] = v[2];
+            MatLocal[1][3] = -(v[0] * origin[0] + v[1] * origin[1] + v[2] * origin[2]);
 
-     return ResList;
- }
+            MatLocal[2][0] = w[0]; MatLocal[2][1] = w[1]; MatLocal[2][2] = w[2];
+            MatLocal[2][3] = -(w[0] * origin[0] + w[1] * origin[1] + w[2] * origin[2]);
+
+            MatLocal[3][0] = 0.0;  MatLocal[3][1] = 0.0;  MatLocal[3][2] = 0.0; MatLocal[3][3] = 1.0;
+
+            if (!IritMiscMatInverseMatrix(MatLocal, InvMat)) {
+                IritFree(coords);
+                continue;
+            }
+
+            /* Create new polygon and vertex list from projected points (z=0 in local coords). */
+            IPPolygonStruct* NewPl = IritPrsrAllocPolygon(0, NULL, NULL);
+            IPVertexStruct* FirstV = NULL;
+            IPVertexStruct* PrevV = NULL;
+
+            for (int j = 0; j < n; ++j) {
+                IrtPtType localP;
+                IritMiscMatMultPtby4by4(localP, coords[j], MatLocal);
+
+                /* Project into view plane by zeroing local z. */
+                localP[2] = 0.0;
+
+                /* Map back to world coordinates. */
+                IrtPtType worldProj;
+                IritMiscMatMultPtby4by4(worldProj, localP, InvMat);
+
+                /* Allocate and link vertex. */
+                IPVertexStruct* NV = IritPrsrAllocVertex2(NULL);
+                NV->Coord[0] = worldProj[0];
+                NV->Coord[1] = worldProj[1];
+                NV->Coord[2] = worldProj[2];
+
+                if (FirstV == NULL) {
+                    FirstV = PrevV = NV;
+                }
+                else {
+                    PrevV->Pnext = NV;
+                    PrevV = NV;
+                }
+            }
+
+            /* Close loop and attach polygon. */
+            PrevV->Pnext = FirstV;
+            NewPl->PVertex = FirstV;
+
+            IritPrsrUpdatePolyPlane(NewPl);
+
+            IPObjectStruct* PolyObj = IritPrsrGenPOLYObject(NewPl);
+            if (PolyObj != NULL) {
+                IP_SET_POLYGON_OBJ(PolyObj);
+                PolyObj->Pnext = NULL;
+
+                /* Set name encoding view and polygon index so extrusion step knows the view. */
+                char namebuf[256];
+                if (IsPre)
+                    snprintf(namebuf, sizeof(namebuf), "proj_pre_view%d_poly%03d", vi, polyIdx);
+                else
+                    snprintf(namebuf, sizeof(namebuf), "proj_dir_view%d_poly%03d", vi, polyIdx);
+
+                PolyObj->ObjName = IritMiscStrdup(namebuf);
+
+                /* Append to temporary per-view list (do not append to global ResList yet). */
+                IritPrsrListObjectAppend(TempList, PolyObj);
+            }
+
+            IritFree(coords);
+        } /* per polygon */
+
+        /* Perform 2D union on TempList. This helper takes ownership of TempList
+           and returns a list whose elements are the unioned polygons (or the
+           original TempList if no union is performed). */
+        IPObjectStruct* UnionList = PerformBooleanUnion(TempList);
+        /* UnionList now owns the polygon objects. */
+
+        if (UnionList != NULL && IP_IS_OLST_OBJ(UnionList)) {
+            /* Move union results into ResList as copies to be safe. */
+            int uidx = 0;
+            IPObjectStruct* UObj = NULL;
+            int outPolyIdx = 0;
+            while ((UObj = IritPrsrListObjectGet(UnionList, uidx++)) != NULL) {
+                /* Copy polygon object to append into ResList (keeps ownership clear). */
+                IPObjectStruct* Copy = IritPrsrCopyObject(NULL, UObj, TRUE);
+                if (Copy != NULL) {
+                    /* Overwrite name to indicate view and index (makes extruder mapping robust). */
+                    char outName[256];
+                    if (IsPre)
+                        snprintf(outName, sizeof(outName), "proj_pre_view%d_poly%03d", vi, outPolyIdx);
+                    else
+                        snprintf(outName, sizeof(outName), "proj_dir_view%d_poly%03d", vi, outPolyIdx);
+                    Copy->ObjName = IritMiscStrdup(outName);
+                    IritPrsrListObjectAppend(ResList, Copy);
+                    ++outPolyIdx;
+                }
+            }
+
+            /* Free the union list container and its internal objects (we copied them). */
+            IritPrsrFreeObject(UnionList);
+        }
+        else {
+            /* Union produced nothing - ensure TempList was freed by helper or free it now. */
+            if (UnionList != NULL)
+                IritPrsrFreeObject(UnionList);
+        }
+    } /* per view */
+
+    if (ResList->U.Lst.PObjList == NULL || ResList->U.Lst.ListMaxLen == 0) {
+        IritPrsrFreeObject(ResList);
+        return NULL;
+    }
+
+    return ResList;
+}
+
+
+
 
 
 
@@ -507,7 +933,7 @@ IPObjectStruct* IritPrsrExtrudeSilhouetteListsToViewSolids(IPObjectStruct* ProjL
     if (ResList == NULL)
         return NULL;
 
-    /* Helper to process a flattened projected list (elements named "proj_{pre|dir}_view%d_poly%03d"). */
+    /* Process both pre and direct projected lists. */
     for (int usePre = 0; usePre < 2; ++usePre) {
         IPObjectStruct* ProjList = usePre ? ProjListPre : ProjListDirect;
         if (ProjList == NULL)
@@ -527,138 +953,72 @@ IPObjectStruct* IritPrsrExtrudeSilhouetteListsToViewSolids(IPObjectStruct* ProjL
                 else
                     sscanf(PObj->ObjName, "proj_dir_view%d_poly%03d", &vi, &polyIdx);
             }
-            /* Fallback: if parsing failed, skip this polygon. */
             if (vi < 0 || vi >= NumViews)
                 continue;
 
-            /* Extract view forward vector (third column) and normalize. */
-            IrtVecType f;
-            f[0] = Views[vi][0][2];
-            f[1] = Views[vi][1][2];
-            f[2] = Views[vi][2][2];
-            {
-                IrtRType flen = sqrt(IRIT_SQR(f[0]) + IRIT_SQR(f[1]) + IRIT_SQR(f[2]));
-                if (flen <= IRIT_EPS) {
-                    f[0] = 0.0; f[1] = 0.0; f[2] = 1.0;
-                    flen = 1.0;
-                }
-                f[0] /= flen; f[1] /= flen; f[2] /= flen;
-            }
+            /* Build view basis (allow fallback). */
+            IrtVecType u, vtmp, f;
+            if (!IritPrsrBuildViewBasisFromMat(Views[vi], u, vtmp, f, 1))
+                continue;
 
-            /* Build local basis u,v (stable). */
-            IrtVecType arb, u, vtmp;
-            if (fabs(f[0]) < 0.9) { arb[0] = 1.0; arb[1] = 0.0; arb[2] = 0.0; }
-            else { arb[0] = 0.0; arb[1] = 1.0; arb[2] = 0.0; }
+            /* Make a working copy of the whole projected polygon object (preserves multiple loops / holes). */
+            IPObjectStruct* PolyCopy = IritPrsrCopyObject(NULL, PObj, TRUE);
+            if (PolyCopy == NULL)
+                continue;
 
-            u[0] = arb[1] * f[2] - arb[2] * f[1];
-            u[1] = arb[2] * f[0] - arb[0] * f[2];
-            u[2] = arb[0] * f[1] - arb[1] * f[0];
-            {
-                IrtRType ul = sqrt(IRIT_SQR(u[0]) + IRIT_SQR(u[1]) + IRIT_SQR(u[2]));
-                if (ul <= IRIT_EPS) continue;
-                u[0] /= ul; u[1] /= ul; u[2] /= ul;
-            }
-
-            vtmp[0] = f[1] * u[2] - f[2] * u[1];
-            vtmp[1] = f[2] * u[0] - f[0] * u[2];
-            vtmp[2] = f[0] * u[1] - f[1] * u[0];
-
-            /* For each polygon component inside this projected object (usually one) */
-            for (IPPolygonStruct* Pl = PObj->U.Pl; Pl != NULL; Pl = Pl->Pnext) {
+            /* Quick validity check: ensure at least one polygon loop has >= 3 vertices. */
+            int hasValidLoop = 0;
+            for (IPPolygonStruct* Pl = PolyCopy->U.Pl; Pl != NULL; Pl = Pl->Pnext) {
+                if (Pl->PVertex == NULL)
+                    continue;
+                /* Count vertices in this loop (cheap guard). */
+                int vcount = 0;
                 IPVertexStruct* V = Pl->PVertex;
-                if (V == NULL)
-                    continue;
-
-                /* Count vertices and collect coordinates. */
-                int n = 0;
-                IPVertexStruct* cur = V;
                 int guard = 0;
-                while (cur != NULL) {
-                    ++n;
-                    cur = cur->Pnext;
-                    if (++guard > 200000) { n = 0; break; }
-                    if (cur == V) break;
-                }
-                if (n < 3)
-                    continue;
-
-                IrtPtType* coords = (IrtPtType*)IritMalloc(sizeof(IrtPtType) * n);
-                if (coords == NULL)
-                    continue;
-
-                cur = V;
-                int idxV = 0;
-                guard = 0;
-                IrtRType cx = 0.0, cy = 0.0, cz = 0.0;
-                while (cur != NULL && idxV < n) {
-                    coords[idxV][0] = cur->Coord[0];
-                    coords[idxV][1] = cur->Coord[1];
-                    coords[idxV][2] = cur->Coord[2];
-                    cx += coords[idxV][0];
-                    cy += coords[idxV][1];
-                    cz += coords[idxV][2];
-                    ++idxV;
-                    cur = cur->Pnext;
+                do {
+                    ++vcount;
+                    V = V->Pnext;
                     if (++guard > 200000) break;
-                    if (cur == V) break;
-                }
-                if (idxV != n) { IritFree(coords); continue; }
+                } while (V != NULL && V != Pl->PVertex);
+                if (vcount >= 3) { hasValidLoop = 1; break; }
+            }
+            if (!hasValidLoop) {
+                IritPrsrFreeObject(PolyCopy);
+                continue;
+            }
 
-                IrtPtType origin;
-                origin[0] = cx / n; origin[1] = cy / n; origin[2] = cz / n;
+            /* Compute extrusion direction from view forward vector scaled by Depth. */
+            IrtVecType Dir;
+            Dir[0] = (IrtRType)(f[0] * Depth);
+            Dir[1] = (IrtRType)(f[1] * Depth);
+            Dir[2] = (IrtRType)(f[2] * Depth);
 
-                /* Build 2D points relative to centroid in the view's (u,v) basis. */
-                IrtE2PtStruct* pts2d = (IrtE2PtStruct*)IritMalloc(sizeof(IrtE2PtStruct) * n);
-                if (pts2d == NULL) { IritFree(coords); continue; }
+            /* Ensure polygon planes are up-to-date (optional but safe). */
+            for (IPPolygonStruct* Pl = PolyCopy->U.Pl; Pl != NULL; Pl = Pl->Pnext) {
+                IritPrsrUpdatePolyPlane(Pl);
+            }
 
-                for (int j = 0; j < n; ++j) {
-                    IrtRType dx = coords[j][0] - origin[0];
-                    IrtRType dy = coords[j][1] - origin[1];
-                    IrtRType dz = coords[j][2] - origin[2];
+            /* Extrude the entire polygon object (keeps holes as holes if present). */
+            IPObjectStruct* Extr = IritGeomPrimGenEXTRUDEObject(PolyCopy, Dir, 3);
 
-                    pts2d[j].Pt[0] = dx * u[0] + dy * u[1] + dz * u[2];
-                    pts2d[j].Pt[1] = dx * vtmp[0] + dy * vtmp[1] + dz * vtmp[2];
-                }
+            /* Free the intermediate copy (extruder returns a new object). */
+            IritPrsrFreeObject(PolyCopy);
 
-                /* Extrude in view forward direction scaled by Depth. */
-                IrtVecType Dir;
-                Dir[0] = (IrtRType)(f[0] * Depth);
-                Dir[1] = (IrtRType)(f[1] * Depth);
-                Dir[2] = (IrtRType)(f[2] * Depth);
+            if (Extr == NULL)
+                continue;
 
-                IPObjectStruct* Extr = IritPrsrExtrude2DPointsToSolidDir(pts2d, n, Dir);
+            /* Name and append result. */
+            char namebuf[512];
+            if (usePre)
+                snprintf(namebuf, sizeof(namebuf), "sil_pre_view%d_poly%03d_extr", vi, polyIdx);
+            else
+                snprintf(namebuf, sizeof(namebuf), "sil_dir_view%d_poly%03d_extr", vi, polyIdx);
 
-                IritFree(pts2d);
-                IritFree(coords);
-
-                if (Extr == NULL)
-                    continue;
-
-                /* Translate extruded solid back to polygon centroid (world). */
-                IrtHmgnMatType T;
-                IritMiscMatGenUnitMat(T);
-                T[0][3] = origin[0];
-                T[1][3] = origin[1];
-                T[2][3] = origin[2];
-
-                IPObjectStruct* Placed = IritGeomTransformObject(Extr, T);
-                IritPrsrFreeObject(Extr);
-
-                if (Placed != NULL) {
-                    /* keep a meaningful ObjName for saving later */
-                    char namebuf[512];
-                    if (usePre)
-                        snprintf(namebuf, sizeof(namebuf), "sil_pre_view%d_poly%03d_extr", vi, polyIdx);
-                    else
-                        snprintf(namebuf, sizeof(namebuf), "sil_dir_view%d_poly%03d_extr", vi, polyIdx);
-
-                    Placed->ObjName = IritMiscStrdup(namebuf);
-                    Placed->Pnext = NULL;
-                    IritPrsrListObjectAppend(ResList, Placed);
-                }
-            } /* per polygon inside PObj */
-        } /* while list elements */
-    } /* for pre/direct */
+            Extr->ObjName = IritMiscStrdup(namebuf);
+            Extr->Pnext = NULL;
+            IritPrsrListObjectAppend(ResList, Extr);
+        }
+    }
 
     if (ResList->U.Lst.PObjList == NULL || ResList->U.Lst.ListMaxLen == 0) {
         IritPrsrFreeObject(ResList);
@@ -667,6 +1027,7 @@ IPObjectStruct* IritPrsrExtrudeSilhouetteListsToViewSolids(IPObjectStruct* ProjL
 
     return ResList;
 }
+
 
 
 /* * Helper: Manually generate a LookAt matrix.
@@ -775,8 +1136,8 @@ IrtRType CalcPolygonArea(IPObjectStruct* PObj)
  * Main Function: Sampling-Based View Selection
  * * 1. Generates 'NumSamples' viewpoints using a Fibonacci Lattice (uniform sphere).
  * and return this.
- * 
- * 
+ *
+ *
  * 2. Calls `IritPrsrGetSilhouettesForViews` to batch process them.
  * 3. Evaluates the returned silhouettes and picks the best one.
  * 4. Returns the 3 of the best view and the matrix itself.
@@ -862,3 +1223,394 @@ IrtHmgnMatType* SelectBestViewSampling(IPObjectStruct* PObj,
 
     //return bestIdx;
 }
+
+
+
+/* Replaced SelectBestViewSampling with a genetic sampling-based selector.
+   Uses existing IRIT helpers to evaluate silhouette-based fitness.
+   Returns an allocated array of view matrices (caller should IritFree it).
+*/
+//IrtHmgnMatType* SelectBestViewSampling(IPObjectStruct* PObj,
+//    int NumSamples,
+//    IrtHmgnMatType* ResultMat)
+//{
+//    /* Parameters adapted from the provided algorithm. */
+//    const int N_POP = 30;
+//    const int MAX_ITER = 15;
+//    const int CONVERGE_ITER = 5;
+//    const double RADIUS = 2.0;
+//    const double P_UNI = 0.30;
+//    const double P_GEO = 0.40;
+//    const double P_NCI = 0.30;
+//    const double P_GLO = 0.05;
+//    const double P_LOC = 0.10;
+//    const int K_NEIGHBORS = 10;
+//    const double EPS_FITNESS_EQ = 1e-8;
+//
+//    int i, j;
+//
+//    if (PObj == NULL || NumSamples <= 0)
+//        return NULL;
+//
+//    /* Allocate candidate view matrices and aux arrays. */
+//    IrtHmgnMatType* ViewMats = (IrtHmgnMatType*)IritMalloc(sizeof(IrtHmgnMatType) * NumSamples);
+//    if (ViewMats == NULL)
+//        return NULL;
+//
+//    typedef struct {
+//        int id;
+//        IrtRType x, y, z;
+//        IrtRType fitness; /* negative indicates not evaluated yet */
+//    } Candidate;
+//
+//    Candidate* candidates = (Candidate*)IritMalloc(sizeof(Candidate) * NumSamples);
+//    if (candidates == NULL) {
+//        IritFree(ViewMats);
+//        return NULL;
+//    }
+//
+//    /* Generate Fibonacci sphere candidate positions and view matrices. */
+//    {
+//        IrtRType golden = (sqrt(5.0) - 1.0) / 2.0; /* fractional golden ratio as used elsewhere */
+//        for (i = 0; i < NumSamples; ++i) {
+//            IrtRType y = 1.0 - (i / (IrtRType)(NumSamples - 1)) * 2.0;
+//            IrtRType radius = sqrt(IRIT_MAX(0.0, 1.0 - y * y));
+//            IrtRType theta = 2.0 * M_PI * golden * i;
+//            IrtRType x = cos(theta) * radius;
+//            IrtRType z = sin(theta) * radius;
+//
+//            /* Scale to radius and create camera position */
+//            IrtVecType CamPos;
+//            CamPos[0] = (IrtRType)(x * RADIUS);
+//            CamPos[1] = (IrtRType)(y * RADIUS);
+//            CamPos[2] = (IrtRType)(z * RADIUS);
+//
+//            /* Choose an Up vector robustly */
+//            IrtVecType Center = { 0.0, 0.0, 0.0 }, Up = { 0.0, 0.0, 1.0 };
+//            if (fabs(CamPos[0]) < 0.01 && fabs(CamPos[1]) < 0.01) {
+//                Up[0] = 1.0; Up[1] = 0.0; Up[2] = 0.0;
+//            }
+//
+//            GenLookAtMatrix(CamPos, Center, Up, ViewMats[i]);
+//
+//            candidates[i].id = i;
+//            candidates[i].x = CamPos[0];
+//            candidates[i].y = CamPos[1];
+//            candidates[i].z = CamPos[2];
+//            candidates[i].fitness = -1.0; /* not evaluated */
+//        }
+//    }
+//
+//    /* Utility: evaluate fitness for a candidate index using silhouette area heuristic. */
+//    auto evaluate_candidate = [&](int cidx) -> IrtRType {
+//        if (cidx < 0 || cidx >= NumSamples)
+//            return 0.0;
+//
+//        if (candidates[cidx].fitness >= 0.0)
+//            return candidates[cidx].fitness; /* cached */
+//
+//        /* Use existing silhouette extractor for a single view and compute area. */
+//        IPObjectStruct* SilList = IritPrsrGetSilhouettesForViews(PObj, &ViewMats[cidx], 1, 20, 0);
+//        IrtRType score = 0.0;
+//        if (SilList != NULL) {
+//            IPObjectStruct* SilObj = IritPrsrListObjectGet(SilList, 0);
+//            if (SilObj != NULL) {
+//                score = CalcPolygonArea(SilObj);
+//            }
+//            IritPrsrFreeObject(SilList);
+//        }
+//        /* cache it */
+//        candidates[cidx].fitness = score;
+//        return score;
+//        };
+//
+//    /* Utility: euclidean distance between two candidates */
+//    auto candidate_dist = [&](int a, int b) -> double {
+//        double dx = candidates[a].x - candidates[b].x;
+//        double dy = candidates[a].y - candidates[b].y;
+//        double dz = candidates[a].z - candidates[b].z;
+//        return sqrt(dx * dx + dy * dy + dz * dz);
+//        };
+//
+//    /* Utility: nearest candidate index to a given point */
+//    auto findNearestCandidate = [&](double cx, double cy, double cz) -> int {
+//        int best = -1;
+//        double bestD = IRIT_INFNTY;
+//        for (i = 0; i < NumSamples; ++i) {
+//            double dx = candidates[i].x - cx;
+//            double dy = candidates[i].y - cy;
+//            double dz = candidates[i].z - cz;
+//            double d2 = dx * dx + dy * dy + dz * dz;
+//            if (d2 < bestD) {
+//                bestD = d2;
+//                best = i;
+//            }
+//        }
+//        return best;
+//        };
+//
+//    /* Utility: get K nearest neighbors indices (returns count in out array). */
+//    /* Note: K is small, simple insertion sort on K best distances. */
+//    auto getKNearest = [&](int targetId, int K, int* outIdx, int outMax) -> int {
+//        if (targetId < 0 || targetId >= NumSamples || K <= 0 || outIdx == NULL)
+//            return 0;
+//        int k = IRIT_MIN(K, outMax);
+//        /* pair of (dist, idx) */
+//        double* bestD = (double*)IritMalloc(sizeof(double) * k);
+//        int* bestI = (int*)IritMalloc(sizeof(int) * k);
+//        for (i = 0; i < k; ++i) {
+//            bestD[i] = IRIT_INFNTY;
+//            bestI[i] = -1;
+//        }
+//        for (i = 0; i < NumSamples; ++i) {
+//            if (i == targetId) continue;
+//            double d = candidate_dist(targetId, i);
+//            /* insert into best lists if smaller than some entry */
+//            for (int j = 0; j < k; ++j) {
+//                if (d < bestD[j]) {
+//                    /* shift down */
+//                    int t;
+//                    for (t = k - 1; t > j; --t) {
+//                        bestD[t] = bestD[t - 1];
+//                        bestI[t] = bestI[t - 1];
+//                    }
+//                    bestD[j] = d;
+//                    bestI[j] = i;
+//                    break;
+//                }
+//            }
+//        }
+//        int outCount = 0;
+//        for (i = 0; i < k; ++i) {
+//            if (bestI[i] >= 0) {
+//                outIdx[outCount++] = bestI[i];
+//            }
+//        }
+//        IritFree(bestD);
+//        IritFree(bestI);
+//        return outCount;
+//        };
+//
+//    /* Initialize RNG */
+//    srand((unsigned)time(NULL));
+//
+//    /* -------------- Initialization: Farthest Point Sampling -------------- */
+//    int popSize = IRIT_MIN(N_POP, NumSamples);
+//    int* population = (int*)IritMalloc(sizeof(int) * popSize);
+//    int* selected = (int*)IritMalloc(sizeof(int) * popSize);
+//    for (i = 0; i < popSize; ++i) selected[i] = -1;
+//
+//    /* pick first at random */
+//    selected[0] = rand() % NumSamples;
+//    for (i = 1; i < popSize; ++i) {
+//        double bestMinD = -1.0;
+//        int bestIdx = -1;
+//        for (j = 0; j < NumSamples; ++j) {
+//            int already = 0;
+//            for (int s = 0; s < i; ++s) if (selected[s] == j) { already = 1; break; }
+//            if (already) continue;
+//            double minD = IRIT_INFNTY;
+//            for (int s = 0; s < i; ++s) {
+//                double d = candidate_dist(j, selected[s]);
+//                if (d < minD) minD = d;
+//            }
+//            if (minD > bestMinD) {
+//                bestMinD = minMinD = minD; /* silence potential uninitialized warning pattern */
+//                bestIdx = j;
+//            }
+//        }
+//        if (bestIdx < 0)
+//            bestIdx = rand() % NumSamples;
+//        selected[i] = bestIdx;
+//    }
+//
+//    /* Evaluate initial population fitness and fill population array */
+//    for (i = 0; i < popSize; ++i) {
+//        population[i] = selected[i];
+//        evaluate_candidate(population[i]);
+//    }
+//
+//    IritFree(selected);
+//
+//    /* ---------- Genetic optimization loop ---------- */
+//    int iter = 0;
+//    int unchanged = 0;
+//    IrtRType bestEver = -1.0;
+//
+//    while (iter < MAX_ITER && unchanged < CONVERGE_ITER) {
+//        /* Generate children until we have popSize children */
+//        int* children = (int*)IritMalloc(sizeof(int) * popSize);
+//        int childCount = 0;
+//
+//        /* Precompute population fitness sum for roulette */
+//        IrtRType popSum = 0.0;
+//        for (i = 0; i < popSize; ++i) {
+//            popSum += candidates[population[i]].fitness > 0.0 ? candidates[population[i]].fitness : 0.0;
+//        }
+//
+//        auto roulette_select = [&](void) -> int {
+//            if (popSum <= EPS_FITNESS_EQ) {
+//                /* fallback to uniform random parent index */
+//                return population[rand() % popSize];
+//            }
+//            double r = ((double)rand() / (double)RAND_MAX) * popSum;
+//            double acc = 0.0;
+//            for (int pi = 0; pi < popSize; ++pi) {
+//                acc += candidates[population[pi]].fitness;
+//                if (acc >= r) return population[pi];
+//            }
+//            return population[popSize - 1];
+//            };
+//
+//        while (childCount < popSize) {
+//            /* selection */
+//            int p1 = roulette_select();
+//            int p2 = roulette_select();
+//            /* ensure distinct parents (if possible) */
+//            int tries = 0;
+//            while (p1 == p2 && tries++ < 8) p2 = roulette_select();
+//
+//            /* Crossover */
+//            double rC = (double)rand() / (double)RAND_MAX;
+//            int childIdx = p1;
+//            if (rC < P_UNI) {
+//                /* uniform: pick either parent */
+//                childIdx = (rand() & 1) ? p1 : p2;
+//            }
+//            else if (rC < P_UNI + P_GEO) {
+//                /* geodesic SLERP midpoint on sphere between p1,p2 */
+//                double ux1 = candidates[p1].x, uy1 = candidates[p1].y, uz1 = candidates[p1].z;
+//                double ux2 = candidates[p2].x, uy2 = candidates[p2].y, uz2 = candidates[p2].z;
+//                double dot = (ux1 * ux2 + uy1 * uy2 + uz1 * uz2) / (RADIUS * RADIUS);
+//                if (dot > 1.0) dot = 1.0;
+//                if (dot < -1.0) dot = -1.0;
+//                double omega = acos(dot);
+//                if (fabs(omega) < 1e-8) {
+//                    childIdx = p1;
+//                }
+//                else {
+//                    double t = 0.5;
+//                    double s_omega = sin(omega);
+//                    double w1 = sin((1.0 - t) * omega) / s_omega;
+//                    double w2 = sin(t * omega) / s_omega;
+//                    double cx = w1 * ux1 + w2 * ux2;
+//                    double cy = w1 * uy1 + w2 * uy2;
+//                    double cz = w1 * uz1 + w2 * uz2;
+//                    /* project back to nearest candidate */
+//                    childIdx = findNearestCandidate(cx, cy, cz);
+//                    if (childIdx < 0) childIdx = p1;
+//                }
+//            }
+//            else {
+//                /* neighborhood crossover: pick a neighbor of random parent */
+//                int base = (rand() & 1) ? p1 : p2;
+//                int neighBuf[K_NEIGHBORS];
+//                int ncnt = getKNearest(base, K_NEIGHBORS, neighBuf, K_NEIGHBORS);
+//                if (ncnt > 0) {
+//                    childIdx = neighBuf[rand() % ncnt];
+//                }
+//                else {
+//                    childIdx = base;
+//                }
+//            }
+//
+//            /* Mutation */
+//            double rM = (double)rand() / (double)RAND_MAX;
+//            if (rM < P_GLO) {
+//                childIdx = rand() % NumSamples; /* global reset */
+//            }
+//            else if (rM < P_GLO + P_LOC) {
+//                int neighBuf[K_NEIGHBORS];
+//                int ncnt = getKNearest(childIdx, K_NEIGHBORS, neighBuf, K_NEIGHBORS);
+//                if (ncnt > 0) childIdx = neighBuf[rand() % ncnt];
+//            }
+//
+//            /* ensure valid */
+//            if (childIdx < 0 || childIdx >= NumSamples) childIdx = rand() % NumSamples;
+//
+//            /* evaluate child fitness if needed */
+//            evaluate_candidate(childIdx);
+//
+//            children[childCount++] = childIdx;
+//        }
+//
+//        /* Combine population + children into a pool, pick top popSize by fitness (elitist) */
+//        int poolSize = popSize + childCount;
+//        int* pool = (int*)IritMalloc(sizeof(int) * poolSize);
+//        for (i = 0; i < popSize; ++i) pool[i] = population[i];
+//        for (i = 0; i < childCount; ++i) pool[popSize + i] = children[i];
+//
+//        /* pick top popSize (selection by repeated max) */
+//        int* newPop = (int*)IritMalloc(sizeof(int) * popSize);
+//        char* used = (char*)IritMalloc(poolSize);
+//        memset(used, 0, poolSize);
+//        for (i = 0; i < popSize; ++i) {
+//            int bestIdx = -1;
+//            IrtRType bestFit = -IRIT_INFNTY;
+//            for (j = 0; j < poolSize; ++j) {
+//                if (used[j]) continue;
+//                IrtRType f = candidates[pool[j]].fitness;
+//                if (f > bestFit) {
+//                    bestFit = f;
+//                    bestIdx = j;
+//                }
+//            }
+//            if (bestIdx < 0) {
+//                /* fallback */
+//                bestIdx = 0;
+//                while (bestIdx < poolSize && used[bestIdx]) ++bestIdx;
+//                if (bestIdx >= poolSize) newPop[i] = pool[0];
+//                else newPop[i] = pool[bestIdx];
+//            }
+//            else {
+//                newPop[i] = pool[bestIdx];
+//                used[bestIdx] = 1;
+//            }
+//        }
+//
+//        /* replace population */
+//        for (i = 0; i < popSize; ++i) population[i] = newPop[i];
+//
+//        /* convergence check */
+//        /* sort population fitness to find current best quickly */
+//        IrtRType currentBest = -1.0;
+//        for (i = 0; i < popSize; ++i) {
+//            IrtRType f = candidates[population[i]].fitness;
+//            if (f > currentBest) currentBest = f;
+//        }
+//        if (fabs(currentBest - bestEver) < 1e-6) {
+//            ++unchanged;
+//        }
+//        else {
+//            unchanged = 0;
+//            bestEver = currentBest;
+//        }
+//
+//        /* free temp */
+//        IritFree(children);
+//        IritFree(pool);
+//        IritFree(newPop);
+//        IritFree(used);
+//
+//        ++iter;
+//    } /* end GA loop */
+//
+//    /* Best candidate index is the population member with highest fitness */
+//    int bestIdx = population[0];
+//    IrtRType bestFit = candidates[bestIdx].fitness;
+//    for (i = 1; i < popSize; ++i) {
+//        IrtRType f = candidates[population[i]].fitness;
+//        if (f > bestFit) { bestFit = f; bestIdx = population[i]; }
+//    }
+//
+//    /* Copy resulting best matrix into ResultMat if provided. */
+//    if (ResultMat != NULL && bestIdx >= 0 && bestIdx < NumSamples) {
+//        IRIT_GEN_COPY(ResultMat, ViewMats[bestIdx], sizeof(IrtHmgnMatType));
+//    }
+//
+//    /* Clean up temporary arrays but keep ViewMats for caller use. */
+//    IritFree(candidates);
+//    IritFree(population);
+//
+//    return ViewMats;
+//}
