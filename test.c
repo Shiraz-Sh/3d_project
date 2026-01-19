@@ -35,6 +35,11 @@ IPObjectStruct* IritPrsrProjectSilhouetteToViewPolys(const IPObjectStruct* SilLi
     int NumViews,
     int IsPre);
 
+IritPrsrProjectSolidFacesToViewPolys(const IPObjectStruct* Solid,
+    const IrtHmgnMatType* ViewMats,
+    int NumViews,
+    int IsPre);
+
 /* Now operate on projected polygon lists (ProjPre / ProjDir) */
 IPObjectStruct* IritPrsrExtrudeSilhouetteListsToViewSolids(IPObjectStruct* ProjListPre,
     IPObjectStruct* ProjListDirect,
@@ -75,31 +80,54 @@ static int CountListObjects(IPObjectStruct* ListObj)
     return cnt;
 }
 
-
 #define NUM_PTS 12
 
 // Main with only direct approach.
 
 int main(void)
 {
-    /* Build a 2D outline and create a simple test solid. */
-    int NumPts = NUM_PTS;
-    IrtE2PtStruct pts[NUM_PTS];
-    for (int i = 0; i < NumPts; ++i) {
-        IrtRType r = (i % 2 == 0) ? 1.0 : 0.5;
-        IrtRType ang = 2.0 * M_PI * i / NUM_PTS;
-        pts[i].Pt[0] = r * cos(ang);
-        pts[i].Pt[1] = r * sin(ang);
+    /* Build a 2D half-dome outline and create a simple test solid.
+       The half-dome is a semicircular arc (y >= 0) plus a straight diameter
+       segment between the arc endpoints to close the polygon. */
+    int nArc = NUM_PTS;                          /* samples along the semicircle */
+    int nBase = IRIT_MAX(1, NUM_PTS / 8);       /* number of points along the flat base (excluding arc endpoints) */
+    int NumPts = nArc + nBase;
+    IrtE2PtStruct pts[NUM_PTS * 2]; /* plenty of room */
+
+    IrtRType R = 1.0; /* dome radius */
+    /* Sample semicircle from angle = 0..pi (right -> left) */
+    for (int i = 0; i < nArc; ++i) {
+        IrtRType ang = M_PI * (IrtRType)i / (IrtRType)(nArc - 1);
+        pts[i].Pt[0] = R * cos(ang);   /* x */
+        pts[i].Pt[1] = R * sin(ang);   /* y (>=0) */
+    }
+    /* Add base (diameter) points from left endpoint back to right endpoint,
+       excluding endpoints to avoid duplicate consecutive points. */
+    for (int j = 0; j < nBase; ++j) {
+        IrtRType t = (j + 1) / (IrtRType)(nBase + 1); /* in (0,1) */
+        /* map t along x from -R to +R, y = 0 */
+        pts[nArc + j].Pt[0] = -R + t * (2.0 * R);
+        pts[nArc + j].Pt[1] = 0.0;
     }
 
     IrtVecType extrDir;
     IRIT_PT_RESET(extrDir);
     extrDir[2] = 1.0;
 
-    //IritPrsrHWCDataStruct HWCParams;
-    //IPObjectStruct* SimPath = NULL;
-    //IritPrsrHWCSetDfltParams(&HWCParams);
+    /*IritPrsrHWCDataStruct HWCParams;
+    IPObjectStruct* SimPath = NULL;
+    IritPrsrHWCSetDfltParams(&HWCParams);*/
     IPObjectStruct* Solid = IritPrsrExtrude2DPointsToSolidDir(pts, NumPts, extrDir);
+
+    if (Solid == NULL) {
+        fprintf(stderr, "Failed to create test solid.\n");
+        return 1;
+    }
+
+    if (IritPrsrOBJSaveFile(Solid, "solid.obj", FALSE, 2, 0))
+        printf("Wrote full model to solid.obj (triangulated).\n");
+    else
+        fprintf(stderr, "Failed to write solid.obj\n");
 
     /* NEW: This returns a Surface object that hot_wire_cut.c can process. */
     //IPObjectStruct* SolidSurf = IritPrsrExtrude2DPointsToRuledSrf(pts, NumPts, extrDir);
@@ -111,31 +139,28 @@ int main(void)
     //        printf("GCode generated. Simulation contains %d paths. \n", CountListObjects(SimPath));
     //    }
     //}
-    if (Solid == NULL) {
-        fprintf(stderr, "Failed to create test solid.\n");
-        return 1;
-    }
-
-    if (IritPrsrOBJSaveFile(Solid, "solid.obj", FALSE, 2, 0))
-        printf("Wrote full model to solid.obj (triangulated).\n");
-    else
-        fprintf(stderr, "Failed to write solid.obj\n");
-
-    /* Build three canonical view matrices: +X, +Y, +Z */
-    IrtHmgnMatType Views[3];
+   
+        /* Build three viewpoints:
+       - three canonical: +X, +Y, +Z */
+    IrtHmgnMatType Views[6];
     {
         IrtVecType Eye, Center, Up;
 
-        Eye[0] = 2.0; Eye[1] = 0.0; Eye[2] = 0.0;
         Center[0] = 0.0; Center[1] = 0.0; Center[2] = 0.0;
-        Up[0] = 0.0; Up[1] = 0.0; Up[2] = 1.0;
+
+        /* +X */
+        Eye[0] = 2.0; Eye[1] = 0.0; Eye[2] = 0.0;
+        Up[0] = 0.0;  Up[1] = 0.0;  Up[2] = 1.0;
         GenLookAtMatrix(Eye, Center, Up, Views[0]);
 
+        /* +Y */
         Eye[0] = 0.0; Eye[1] = 2.0; Eye[2] = 0.0;
+        Up[0] = 0.0;  Up[1] = 0.0;  Up[2] = 1.0;
         GenLookAtMatrix(Eye, Center, Up, Views[1]);
 
+        /* +Z (top) - use Y as Up to avoid singularity for strict top) */
         Eye[0] = 0.0; Eye[1] = 0.0; Eye[2] = 2.0;
-        Up[0] = 0.0; Up[1] = 1.0; Up[2] = 0.0;
+        Up[0] = 0.0;  Up[1] = 1.0;  Up[2] = 0.0;
         GenLookAtMatrix(Eye, Center, Up, Views[2]);
     }
 
@@ -165,9 +190,11 @@ int main(void)
                 printf("Wrote %s\n", fname);
         }
     }
+    
 
     /* Project direct silhouettes (flatten to 2D polygons per view). */
     IPObjectStruct* ProjDir = IritPrsrProjectSilhouetteToViewPolys(SilListDirect, Views, NumViews, 0);
+    //IPObjectStruct* ProjDir = IritPrsrProjectSolidFacesToViewPolys(Solid, Views, NumViews, 0);
     if (ProjDir == NULL) {
         printf("No projected polygons produced from direct silhouettes.\n");
         IritPrsrFreeObject(SilListDirect);
@@ -249,7 +276,7 @@ int main(void)
                     IritCagdBspKnotUniformOpen(n, 2, Crv->KnotVector);
 
                     CagdVecStruct Dir;
-					IrtRType Depth = 10.0; /* Extrusion depth for HWC simulation. */
+                    IrtRType Depth = 10.0; /* Extrusion depth for HWC simulation. */
                     Dir.Vec[0] = Views[vi][0][2] * Depth;
                     Dir.Vec[1] = Views[vi][1][2] * Depth;
                     Dir.Vec[2] = Views[vi][2][2] * Depth;
@@ -264,8 +291,8 @@ int main(void)
                         printf("GCode successfully written to: %s\n", gcname);
                         IritPrsrFreeObject(Sim);
                     }
-                                    else {
-                    printf("This is some wierd object I can't cut\n");
+                    else {
+                        printf("This is some wierd object I can't cut\n");
                     }
 
                     IritPrsrFreeObject(TempSrfObj);
