@@ -14,31 +14,25 @@
 #include "../prsr_lib/prsr_loc.h"
 /* For IritPrsrHWCDataStruct and friends */
 
-IPObjectStruct* IritPrsrExtrude2DPointsToRuledSrf(const IrtE2PtStruct* pts,
-    int n,
-    IrtVecType Dir);
+/* Ensure M_PI is available on MSVC builds that require _USE_MATH_DEFINES. */
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 
 /* Prototypes for the helpers implemented in prsr_lib/hot_wire_cut_new_alg.c */
 IPObjectStruct* IritPrsrExtrude2DPointsToSolidDir(const IrtE2PtStruct* pts,
     int n,
     IrtVecType Dir);
 
-IPObjectStruct* IritPrsrGetSilhouettesForViews(const IPObjectStruct* PObj,
-    const IrtHmgnMatType* ViewMats,
-    int NumViews,
-    int GridSize,
-    int UsePreprocess);
+/* Approximate outer B-spline-like contour from a view (implemented in hot_wire_cut_new_alg.c) */
+IPObjectStruct* IritPrsrApproxBSplineContourFromSolidView(IPObjectStruct* Solid,
+    const IrtHmgnMatType ViewMat,
+    int NumCtrl,
+    int Iterations,
+    IrtRType ShrinkStep,
+    IrtRType SmoothW);
 
-/* Project-only helper (new) - updated signature includes IsPre flag */
-IPObjectStruct* IritPrsrProjectSilhouetteToViewPolys(const IPObjectStruct* SilList,
-    const IrtHmgnMatType* ViewMats,
-    int NumViews,
-    int IsPre);
-
-IritPrsrProjectSolidFacesToViewPolys(const IPObjectStruct* Solid,
-    const IrtHmgnMatType* ViewMats,
-    int NumViews,
-    int IsPre);
 
 /* Now operate on projected polygon lists (ProjPre / ProjDir) */
 IPObjectStruct* IritPrsrExtrudeSilhouetteListsToViewSolids(IPObjectStruct* ProjListPre,
@@ -53,18 +47,16 @@ void GenLookAtMatrix(IrtVecType Eye, IrtVecType Center, IrtVecType Up, IrtHmgnMa
 /* Already in hot_wire_cut.c - ensure prototype visible to the compiler. */
 void IritPrsrHWCSetDfltParams(IritPrsrHWCDataStruct* Data);
 
-void IritPrsrHWCSetDfltParams(IritPrsrHWCDataStruct* Data);
-
 IPObjectStruct* IritPrsrHWCCreatePath(const IPObjectStruct* ModelMainPart,
     const IPObjectStruct* ModelTopCover,
     const IPObjectStruct* ModelBottomCover,
     const char* GCodeOutputFilePath,
     const IritPrsrHWCDataStruct* Params);
 
+/* New/changed helper exported from hot_wire_cut_new_alg.c */
 IrtHmgnMatType* SelectBestViewSampling(IPObjectStruct* PObj,
     int NumSamples,
     IrtHmgnMatType* ResultMat);
-
 
 
 /* Count elements inside a LIST object using the public accessor. */
@@ -114,9 +106,6 @@ int main(void)
     IRIT_PT_RESET(extrDir);
     extrDir[2] = 1.0;
 
-    /*IritPrsrHWCDataStruct HWCParams;
-    IPObjectStruct* SimPath = NULL;
-    IritPrsrHWCSetDfltParams(&HWCParams);*/
     IPObjectStruct* Solid = IritPrsrExtrude2DPointsToSolidDir(pts, NumPts, extrDir);
 
     if (Solid == NULL) {
@@ -129,101 +118,94 @@ int main(void)
     else
         fprintf(stderr, "Failed to write solid.obj\n");
 
-    /* NEW: This returns a Surface object that hot_wire_cut.c can process. */
-    //IPObjectStruct* SolidSurf = IritPrsrExtrude2DPointsToRuledSrf(pts, NumPts, extrDir);
-    //IritMiscAttrIDSetObjectIntAttrib(SolidSurf, IRIT_ATTR_ID_Dir, CAGD_CONST_V_DIR); // I don't know if this is fine
-    //if (SolidSurf != NULL) {
-    //    /* Now this call will generate GCode instead of skipping labels. */
-    //    SimPath = IritPrsrHWCCreatePath(SolidSurf, NULL, NULL, "output.gcode", &HWCParams);
-    //    if (SimPath != NULL) {
-    //        printf("GCode generated. Simulation contains %d paths. \n", CountListObjects(SimPath));
-    //    }
-    //}
-   
-        /* Build three viewpoints:
-       - three canonical: +X, +Y, +Z */
-    IrtHmgnMatType Views[6];
-    {
-        IrtVecType Eye, Center, Up;
 
-        Center[0] = 0.0; Center[1] = 0.0; Center[2] = 0.0;
-
-        /* +X */
-        Eye[0] = 2.0; Eye[1] = 0.0; Eye[2] = 0.0;
-        Up[0] = 0.0;  Up[1] = 0.0;  Up[2] = 1.0;
-        GenLookAtMatrix(Eye, Center, Up, Views[0]);
-
-        /* +Y */
-        Eye[0] = 0.0; Eye[1] = 2.0; Eye[2] = 0.0;
-        Up[0] = 0.0;  Up[1] = 0.0;  Up[2] = 1.0;
-        GenLookAtMatrix(Eye, Center, Up, Views[1]);
-
-        /* +Z (top) - use Y as Up to avoid singularity for strict top) */
-        Eye[0] = 0.0; Eye[1] = 0.0; Eye[2] = 2.0;
-        Up[0] = 0.0;  Up[1] = 1.0;  Up[2] = 0.0;
-        GenLookAtMatrix(Eye, Center, Up, Views[2]);
-    }
-
+        /* Choose views using the new helper in hot_wire_cut_new_alg.c.
+       This replaces the manual construction of three canonical views. */
     const int NumViews = 3;
-
-    /* ---------- DIRECT-ONLY SILHOUETTE WORKFLOW (no preprocessing) ---------- */
-
-    IPObjectStruct* SilListDirect = IritPrsrGetSilhouettesForViews(Solid, Views, NumViews, 20, 0);
-    if (SilListDirect == NULL) {
-        fprintf(stderr, "IritPrsrGetSilhouettesForViews (direct) returned NULL\n");
+    IrtHmgnMatType* Views = SelectBestViewSampling(Solid, NumViews, NULL);
+    if (Views == NULL) {
+        fprintf(stderr, "SelectBestViewSampling failed to provide view matrices.\n");
         IritPrsrFreeObject(Solid);
         return 1;
     }
-    printf("Direct mode: silhouettes returned = %d (expected %d)\n", CountListObjects(SilListDirect), NumViews);
 
-    /* Save each per-view silhouette to its own OBJ file (so you get the raw 3D silhouette polylines). */
-    {
-        char fname[512];
-        for (int vi = 0; vi < NumViews; ++vi) {
-            IPObjectStruct* SV = IritPrsrListObjectGet(SilListDirect, vi);
-            if (SV == NULL)
-                continue;
-            snprintf(fname, sizeof(fname), "sil_direct_view%d.obj", vi);
-            if (!IritPrsrOBJSaveFile(SV, fname, FALSE, 0, 0))
-                fprintf(stderr, "Failed saving %s\n", fname);
-            else
-                printf("Wrote %s\n", fname);
-        }
-    }
-    
+    /* Choose three canonical viewpoints: +X, +Y, +Z. */
+    //const int NumViews = 3;
+    //IrtHmgnMatType Views[3];
+    //{
+    //    IrtVecType Eye, Center, Up;
 
-    /* Project direct silhouettes (flatten to 2D polygons per view). */
-    IPObjectStruct* ProjDir = IritPrsrProjectSilhouetteToViewPolys(SilListDirect, Views, NumViews, 0);
-    //IPObjectStruct* ProjDir = IritPrsrProjectSolidFacesToViewPolys(Solid, Views, NumViews, 0);
+    //    Center[0] = 0.0; Center[1] = 0.0; Center[2] = 0.0;
+
+    //    /* +X */
+    //    Eye[0] = 2.0; Eye[1] = 0.0; Eye[2] = 0.0;
+    //    Up[0] = 0.0;  Up[1] = 0.0;  Up[2] = 1.0;
+    //    GenLookAtMatrix(Eye, Center, Up, Views[0]);
+
+    //    /* +Y */
+    //    Eye[0] = 0.0; Eye[1] = 2.0; Eye[2] = 0.0;
+    //    Up[0] = 0.0;  Up[1] = 0.0;  Up[2] = 1.0;
+    //    GenLookAtMatrix(Eye, Center, Up, Views[1]);
+
+    //    /* +Z (top) - use Y as Up to avoid singularity for strict top) */
+    //    Eye[0] = 0.0; Eye[1] = 0.0; Eye[2] = 2.0;
+    //    Up[0] = 0.0;  Up[1] = 1.0;  Up[2] = 0.0;
+    //    GenLookAtMatrix(Eye, Center, Up, Views[2]);
+    //}
+
+    /* ---------- REPLACEMENT: Use B-spline contour approximation per view ----------
+       For each view, compute a robust outer contour polygon using the new
+       IritPrsrApproxBSplineContourFromSolidView helper, collect them in ProjDir
+       (world-space polygons), and continue with extrusion as before.
+    */
+
+    IPObjectStruct* ProjDir = IritPrsrGenLISTObject(NULL);
     if (ProjDir == NULL) {
-        printf("No projected polygons produced from direct silhouettes.\n");
-        IritPrsrFreeObject(SilListDirect);
+        fprintf(stderr, "Failed allocating ProjDir list\n");
         IritPrsrFreeObject(Solid);
-        return 0;
+        IritFree(Views);
+        return 1;
     }
 
-    printf("Projected (direct) polygons = %d\n", CountListObjects(ProjDir));
-    /* Save each projected 2D polygon object to its own OBJ file. */
-    {
-        char fname[512];
-        int pidx = 0;
-        IPObjectStruct* P = NULL;
-        while ((P = IritPrsrListObjectGet(ProjDir, pidx)) != NULL) {
-            /* If ObjName was set by projector, use it; otherwise use index-based name. */
-            const char* base = P->ObjName ? P->ObjName : "dir_proj_poly";
-            snprintf(fname, sizeof(fname), "%s.obj", base);
-            if (!IritPrsrOBJSaveFile(P, fname, FALSE, 0, 0))
-                fprintf(stderr, "Failed saving %s\n", fname);
-            else
-                printf("Wrote %s\n", fname);
-            ++pidx;
+    int created = 0;
+    for (int vi = 0; vi < NumViews; ++vi) {
+        /* Approximate an outer contour for this view.
+           Parameters: NumCtrl=32, Iterations=80, ShrinkStep=0.25, SmoothW=0.3 */
+        IPObjectStruct* Contour = IritPrsrApproxBSplineContourFromSolidView(Solid, Views[vi], 32, 80, 0.25, 0.3);
+        if (Contour == NULL) {
+            printf("View %d: contour approximation failed\n", vi);
+            continue;
         }
+
+        /* Name and append to list so later code can find view index if needed. */
+        char cname[256];
+        snprintf(cname, sizeof(cname), "proj_dir_view%d_poly%03d", vi, 0);
+        Contour->ObjName = IritMiscStrdup(cname);
+        Contour->Pnext = NULL;
+        IritPrsrListObjectAppend(ProjDir, Contour);
+        ++created;
+
+        /* Save raw contour poly for inspection. */
+        char fname[512];
+        snprintf(fname, sizeof(fname), "contour_view%d.obj", vi);
+        if (!IritPrsrOBJSaveFile(Contour, fname, FALSE, 0, 0))
+            fprintf(stderr, "Failed saving %s\n", fname);
+        else
+            printf("Wrote %s\n", fname);
+    }
+
+    if (created == 0) {
+        printf("No contours produced from approximation.\n");
+        IritPrsrFreeObject(ProjDir);
+        IritPrsrFreeObject(Solid);
+        IritFree(Views);
+        return 0;
     }
 
     /* Extrude projected polygons in their original view directions and collect solids. */
     IPObjectStruct* SolList = IritPrsrExtrudeSilhouetteListsToViewSolids(NULL, ProjDir, Views, NumViews, 0.5);
     if (SolList == NULL) {
-        printf("No solids generated from projected polygons.\n");
+        printf("No solids generated from projected contours.\n");
     }
     else {
         /* Save each generated solid using its ObjName (set by the extruder). */
@@ -277,8 +259,8 @@ int main(void)
 
                     CagdVecStruct Dir;
                     IrtRType Depth = 10.0; /* Extrusion depth for HWC simulation. */
-                    Dir.Vec[0] = Views[vi][0][2] * Depth;
-                    Dir.Vec[1] = Views[vi][1][2] * Depth;
+                    Dir.Vec[0] = Views[vi][2][0] * Depth;
+                    Dir.Vec[1] = Views[vi][2][1] * Depth;
                     Dir.Vec[2] = Views[vi][2][2] * Depth;
 
                     CagdSrfStruct* Srf = IritCagdExtrudeSrf(Crv, &Dir);
@@ -297,6 +279,7 @@ int main(void)
 
                     IritPrsrFreeObject(TempSrfObj);
                     IritCagdCrvFree(Crv);
+                    /* DO NOT free Views here - it is used later/only freed once after all processing. */
                 }
                 else {
                     printf("This is some wierd object I can't cut\n");
@@ -308,233 +291,12 @@ int main(void)
 
     /* Cleanup allocated IRIT objects. */
 
-
     /* Cleanup */
     IritPrsrFreeObject(ProjDir);
-    IritPrsrFreeObject(SilListDirect);
     IritPrsrFreeObject(Solid);
     IritPrsrFreeObject(SolList);
-    //IritPrsrFreeObject(SolidSurf);
+    IritFree(Views);
 
-    printf("Direct-only silhouette test completed.\n");
+    printf("Contour-approximation silhouette test completed.\n");
     return 0;
 }
-
-
-// Main with testing direct and prprocess approaches.
-
-//int main(void)
-//{
-//    /* Build a more interesting 2D outline: a 12-point star/octagon and extrude it. */
-//    int NumPts = NUM_PTS;
-//    IrtE2PtStruct pts[NUM_PTS];
-//    for (int i = 0; i < NumPts; ++i) {
-//        /* alternating radii to produce a star-like outline */
-//        IrtRType r = (i % 2 == 0) ? 1.0 : 0.5;
-//        IrtRType ang = 2.0 * M_PI * i / NUM_PTS;
-//        pts[i].Pt[0] = r * cos(ang);
-//        pts[i].Pt[1] = r * sin(ang);
-//    }
-//
-//    /* Extrude the 2D outline to a polygonal solid along Z (axis = 2).
-//       Use the vector-based API to allow arbitrary directions: */
-//    IrtVecType extrDir;
-//    IRIT_PT_RESET(extrDir);
-//    extrDir[2] = 1.0; /* length 1.0 along Z */
-//    IPObjectStruct* Solid = IritPrsrExtrude2DPointsToSolidDir(pts, NumPts, extrDir);
-//    if (Solid == NULL) {
-//        fprintf(stderr, "Failed to create test solid.\n");
-//        return 1;
-//    }
-//
-//    /* Write the entire 3D model (Solid) to OBJ as triangles. */
-//    if (IritPrsrOBJSaveFile(Solid, "solid.obj", FALSE, 2, 0)) {
-//        printf("Wrote full model to solid.obj (triangulated).\n");
-//    }
-//    else {
-//        fprintf(stderr, "Failed to write solid.obj\n");
-//    }
-//
-//    /* Prepare three view matrices that look along +X, +Y and +Z axes.
-//       We construct LookAt matrices with camera positioned on the +axis,
-//       looking at the origin. */
-//    IrtHmgnMatType Views[3];
-//    {
-//        IrtVecType Eye, Center, Up;
-//
-//        /* View 0: look from +X toward origin. */
-//        Eye[0] = 2.0; Eye[1] = 0.0; Eye[2] = 0.0;
-//        Center[0] = 0.0; Center[1] = 0.0; Center[2] = 0.0;
-//        Up[0] = 0.0; Up[1] = 0.0; Up[2] = 1.0; /* Z up */
-//        GenLookAtMatrix(Eye, Center, Up, Views[0]);
-//
-//        /* View 1: look from +Y toward origin. */
-//        Eye[0] = 0.0; Eye[1] = 2.0; Eye[2] = 0.0;
-//        Center[0] = 0.0; Center[1] = 0.0; Center[2] = 0.0;
-//        Up[0] = 0.0; Up[1] = 0.0; Up[2] = 1.0; /* Z up */
-//        GenLookAtMatrix(Eye, Center, Up, Views[1]);
-//
-//        /* View 2: look from +Z toward origin (top). Use Y as up to avoid singularity. */
-//        Eye[0] = 0.0; Eye[1] = 0.0; Eye[2] = 2.0;
-//        Center[0] = 0.0; Center[1] = 0.0; Center[2] = 0.0;
-//        Up[0] = 0.0; Up[1] = 1.0; Up[2] = 0.0; /* Y up for top view */
-//        GenLookAtMatrix(Eye, Center, Up, Views[2]);
-//    }
-//
-//    const int NumViews = 3;
-//
-//    /* Test with preprocessing (should be faster for manyviews). */
-//    IPObjectStruct* SilListPre = IritPrsrGetSilhouettesForViews(Solid, Views, NumViews, 20, 1);
-//    if (SilListPre == NULL) {
-//        fprintf(stderr, "IritPrsrGetSilhouettesForViews (preprocess) returned NULL\n");
-//        IritPrsrFreeObject(Solid);
-//        return 1;
-//    }
-//    int cntPre = CountListObjects(SilListPre);
-//    printf("Preprocess mode: silhouettes returned = %d (expected %d)\n", cntPre, NumViews);
-//
-//    /* Test without preprocessing (direct per-view computation). */
-//    IPObjectStruct* SilListDirect = IritPrsrGetSilhouettesForViews(Solid, Views, NumViews, 20, 0);
-//    if (SilListDirect == NULL) {
-//        fprintf(stderr, "IritPrsrGetSilhouettesForViews (direct) returned NULL\n");
-//        IritPrsrFreeObject(SilListPre);
-//        IritPrsrFreeObject(Solid);
-//        return 1;
-//    }
-//    int cntDirect = CountListObjects(SilListDirect);
-//    printf("Direct mode: silhouettes returned = %d (expected %d)\n", cntDirect, NumViews);
-//
-//    /* Basic validation. */
-//    if (cntPre != NumViews || cntDirect != NumViews) {
-//        fprintf(stderr, "Unexpected number of silhouette objects returned.\n");
-//        IritPrsrFreeObject(SilListPre);
-//        IritPrsrFreeObject(SilListDirect);
-//        IritPrsrFreeObject(Solid);
-//        return 1;
-//    }
-//
-//    /* Optionally inspect/print polygon counts per silhouette (simple diagnostic). */
-//    for (int i = 0; i < NumViews; ++i) {
-//        IPObjectStruct* S = IritPrsrListObjectGet(SilListPre, i);
-//        int numPl = 0;
-//        if (S && IP_IS_POLY_OBJ(S)) {
-//            for (IPPolygonStruct* Pl = S->U.Pl; Pl != NULL; Pl = Pl->Pnext)
-//                ++numPl;
-//        }
-//        printf("Pre silhouette %d polygons: %d\n", i, numPl);
-//    }
-//
-//    /* Also write the LIST objects as an OBJ (grouped) using the same exporter. */
-//    IritPrsrOBJSaveFile(SilListPre, "sil_pre.obj", FALSE, 0, 0);
-//    IritPrsrOBJSaveFile(SilListDirect, "sil_direct.obj", FALSE, 0, 0);
-//
-//    /* --- Save each silhouette element separately as its own OBJ file --- */
-//    {
-//        char fname[512];
-//        IPObjectStruct *S = NULL;
-//        int idx = 0;
-//
-//        /* Save preprocessed silhouettes individually */
-//        idx = 0;
-//        while ((S = IritPrsrListObjectGet(SilListPre, idx)) != NULL) {
-//            snprintf(fname, sizeof(fname), "sil_pre_view%d_sil%d.obj", idx / 1, idx); /* idx corresponds to view index order */
-//            if (!IritPrsrOBJSaveFile(S, fname, FALSE, 0, 0))
-//                fprintf(stderr, "Failed saving %s\n", fname);
-//            else
-//                printf("Wrote %s\n", fname);
-//            ++idx;
-//        }
-//
-//        /* Save direct silhouettes individually */
-//        idx = 0;
-//        while ((S = IritPrsrListObjectGet(SilListDirect, idx)) != NULL) {
-//            snprintf(fname, sizeof(fname), "sil_direct_view%d_sil%d.obj", idx / 1, idx);
-//            if (!IritPrsrOBJSaveFile(S, fname, FALSE, 0, 0))
-//                fprintf(stderr, "Failed saving %s\n", fname);
-//            else
-//                printf("Wrote %s\n", fname);
-//            ++idx;
-//        }
-//    }
-//
-//   
-//    /* --- Save projected 2D polygons (use new API that accepts whole silhouette LIST + Views array) --- */
-//    IPObjectStruct* ProjPre = NULL;
-//    IPObjectStruct* ProjDir = NULL;
-//    {
-//        char fname[512];
-//
-//        /* Project all preprocessed silhouettes using the Views array.
-//           The new helper takes the silhouette LIST, the Views array and NumViews.
-//           It returns a LIST of polygon objects (flattened across silhouettes). */
-//        ProjPre = IritPrsrProjectSilhouetteToViewPolys(SilListPre, Views, NumViews, 1);
-//        if (ProjPre != NULL) {
-//            int pidx = 0;
-//            IPObjectStruct* P = NULL;
-//            int total = CountListObjects(ProjPre);
-//            printf("Projected (pre) polygons = %d\n", total);
-//            while ((P = IritPrsrListObjectGet(ProjPre, pidx)) != NULL) {
-//                snprintf(fname, sizeof(fname), "sil_pre_proj_poly%03d.obj", pidx);
-//                if (!IritPrsrOBJSaveFile(P, fname, FALSE, 0, 0))
-//                    fprintf(stderr, "Failed saving %s\n", fname);
-//                else
-//                    printf("Wrote %s\n", fname);
-//                ++pidx;
-//            }
-//        }
-//
-//        /* Project all direct silhouettes similarly. */
-//        ProjDir = IritPrsrProjectSilhouetteToViewPolys(SilListDirect, Views, NumViews, 0);
-//        if (ProjDir != NULL) {
-//            int pidx = 0;
-//            IPObjectStruct* P = NULL;
-//            int total = CountListObjects(ProjDir);
-//            printf("Projected (direct) polygons = %d\n", total);
-//            while ((P = IritPrsrListObjectGet(ProjDir, pidx)) != NULL) {
-//                snprintf(fname, sizeof(fname), "sil_direct_proj_poly%03d.obj", pidx);
-//                if (!IritPrsrOBJSaveFile(P, fname, FALSE, 0, 0))
-//                    fprintf(stderr, "Failed saving %s\n", fname);
-//                else
-//                    printf("Wrote %s\n", fname);
-//                ++pidx;
-//            }
-//        }
-//    }
-//
-//    /* ---  extrude 2D polygons in the direction of the view point --- */
-//    IPObjectStruct* SolList = NULL;
-//    {
-//        /* NOTE: pass projected polygon lists (ProjPre / ProjDir) to the extruder */
-//        SolList = IritPrsrExtrudeSilhouetteListsToViewSolids(ProjPre, ProjDir, Views, NumViews, 0.5);
-//
-//        if (SolList != NULL) {
-//            /* Save each generated solid using its ObjName (set by the function). */
-//            char fname[1024];
-//            int sidx = 0;
-//            IPObjectStruct* S = NULL;
-//            while ((S = IritPrsrListObjectGet(SolList, sidx)) != NULL) {
-//                const char* base = S->ObjName ? S->ObjName : "extr_poly";
-//                snprintf(fname, sizeof(fname), "%s.obj", base);
-//                if (!IritPrsrOBJSaveFile(S, fname, FALSE, 2, 0))
-//                    fprintf(stderr, "Failed saving %s\n", fname);
-//                else
-//                    printf("Wrote %s\n", fname);
-//                ++sidx;
-//            }
-//            /* Keep SolList around for later use (do not free here). */
-//        }
-//        else {
-//            printf("No solids generated from projected polygons.\n");
-//        }
-//    }
-//
-//    /* Free allocated objects. */
-//    IritPrsrFreeObject(ProjPre);
-//    IritPrsrFreeObject(ProjDir);
-//    IritPrsrFreeObject(SilListPre);
-//    IritPrsrFreeObject(SilListDirect);
-//    IritPrsrFreeObject(Solid);
-//
-//    printf("Silhouette tests completed successfully. Files written: sil_pre.obj, sil_direct.obj, solid.obj and per-view solids\n");
-//    return 0;
-//}
