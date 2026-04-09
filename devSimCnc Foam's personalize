@@ -1,0 +1,33 @@
+Instructions for personalized the simulation for our machine with 5 axes (from chat):
+
+Here are the exact step-by-step instructions to configure DevSim CNC Foam so it perfectly simulates your machine based on this manual:
+
+### **Step 1: Open the G-Code Mapping Settings**
+1. Open DevSim CNC Foam.
+2. Click on **Settings** (the gear icon) and go to the **GCode parameters** tab.
+3. Check the box at the top that says **"Ignore all these parameters if specified in the GCode"** (This forces the software to use your manual settings below instead of looking for headers in your file).
+
+### **Step 2: Map the Left and Right Clamps (Towers)**
+Based on your manual (`GCode (X,Z) define the position of the left clamp` and `GCode (Y,A) define the position of the right clamp`), change the axis letters to exactly this:
+* **XL (Horizontal Left):** `X`
+* **YL (Vertical Left):** `Z`
+* **XR (Horizontal Right):** `Y`
+* **YR (Vertical Right):** `A`
+
+### **Step 3: Map the Rotary Turntable**
+Your manual states: `(B) represent the disc rotation angle` and `Rotation B (Around the vertical axis)`.
+1. In the same GCode settings window, look for the **5th Axis** section.
+2. Set the 5th Axis letter to: `B`
+3. Set the **Kinematic Type** to: **Rotating Table** *(Do not select Lathe. A Lathe rotates on the horizontal axis, but your documentation explicitly says B rotates around the vertical Z-axis).*
+
+### **Step 4: Set the Machine Dimensions**
+1. Switch to the **Cnc and Foam sizes** tab.
+2. Set the **Units** to **Millimeters (mm)**.
+3. **Distance between carriages:** Your manual mentions that the physical Y-axis represents the "distance between clamps." You need to measure the actual physical distance between your left clamp tower and your right clamp tower and enter that value here (e.g., 1000mm).
+4. **Foam Block Size:** Enter the X, Y, and Z dimensions of the styrofoam block you are cutting so the virtual block matches reality.
+
+### **Step 5: Define the Origin**
+Your manual states: `Origin (0,0,0): Back-Right-Bottom corner of the machine volume.`
+1. In the **Origin/Placement** settings of DevSim, make sure you offset the virtual foam block so that the machine's 0,0,0 coordinate aligns with the bottom-back-right of your workspace, rather than the center or front-left.
+
+Once you click **OK** and load your `.gcode` file, DevSim CNC Foam will now correctly read your X/Z and Y/A lines to move the independent clamps, and spin the foam block around the vertical axis whenever it sees a B command!
