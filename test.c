@@ -10,22 +10,26 @@
 #include "inc_irit/bool_lib.h"
 #include "inc_irit/geom_lib.h"
 #include "inc_irit/misc_lib.h"
-#include "inc_irit/ip_cnvrt.h" /* Added: prototype for IritPrsrOpenPolysToClosed */
+#include "inc_irit/ip_cnvrt.h"
 #include "../prsr_lib/prsr_loc.h"
-/* For IritPrsrHWCDataStruct and friends */
 
-/* Ensure M_PI is available on MSVC builds that require _USE_MATH_DEFINES. */
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
 
-
-/* Prototypes for the helpers implemented in prsr_lib/hot_wire_cut_new_alg.c */
+/* ---------------------------------------------------------------------------
+ * Prototypes for functions implemented in prsr_lib/hot_wire_cut_new_alg.c
+ * ------------------------------------------------------------------------- */
 IPObjectStruct* IritPrsrExtrude2DPointsToSolidDir(const IrtE2PtStruct* pts,
     int n,
     IrtVecType Dir);
 
-/* Approximate outer B-spline-like contour from a view (implemented in hot_wire_cut_new_alg.c) */
+IPObjectStruct* IritPrsrGetSilhouettesForViews(const IPObjectStruct* PObj,
+    const IrtHmgnMatType* ViewMats,
+    int NumViews,
+    int GridSize,
+    int UsePreprocess);
+
 IPObjectStruct* IritPrsrApproxBSplineContourFromSolidView(IPObjectStruct* Solid,
     const IrtHmgnMatType ViewMat,
     int NumCtrl,
@@ -33,18 +37,22 @@ IPObjectStruct* IritPrsrApproxBSplineContourFromSolidView(IPObjectStruct* Solid,
     IrtRType ShrinkStep,
     IrtRType SmoothW);
 
+/* Build the silhouette-to-ruled-surface converter (new in hot_wire_cut_new_alg.c). */
+IPObjectStruct* IritPrsrHWCBuildSilhouetteRuledSrf(
+    const IPObjectStruct* Contour,
+    const IrtHmgnMatType         ViewMat,
+    const IritPrsrHWCDataStruct* Params);
 
-/* Now operate on projected polygon lists (ProjPre / ProjDir) */
-IPObjectStruct* IritPrsrExtrudeSilhouetteListsToViewSolids(IPObjectStruct* ProjListPre,
-    IPObjectStruct* ProjListDirect,
-    const IrtHmgnMatType* Views,
-    int NumViews,
-    IrtRType Depth);
+IrtHmgnMatType* SelectBestViewSampling(IPObjectStruct* PObj,
+    int NumSamples,
+    IrtHmgnMatType* ResultMat);
 
-/* GenLookAtMatrix (defined in hot_wire_cut_new_alg.c) - declare for test usage */
-void GenLookAtMatrix(IrtVecType Eye, IrtVecType Center, IrtVecType Up, IrtHmgnMatType Mat);
+void GenLookAtMatrix(IrtVecType Eye,
+    IrtVecType Center,
+    IrtVecType Up,
+    IrtHmgnMatType Mat);
 
-/* Already in hot_wire_cut.c - ensure prototype visible to the compiler. */
+/* Prototypes from hot_wire_cut.c */
 void IritPrsrHWCSetDfltParams(IritPrsrHWCDataStruct* Data);
 
 IPObjectStruct* IritPrsrHWCCreatePath(const IPObjectStruct* ModelMainPart,
@@ -53,51 +61,127 @@ IPObjectStruct* IritPrsrHWCCreatePath(const IPObjectStruct* ModelMainPart,
     const char* GCodeOutputFilePath,
     const IritPrsrHWCDataStruct* Params);
 
-/* New/changed helper exported from hot_wire_cut_new_alg.c */
-IrtHmgnMatType* SelectBestViewSampling(IPObjectStruct* PObj,
-    int NumSamples,
-    IrtHmgnMatType* ResultMat);
+/* ---------------------------------------------------------------------------
+ * CombineGCodeFiles
+ *
+ * Concatenate per-view GCode files into one combined file, adjusting B
+ * (rotation) values so rotation is continuous across views.
+ *
+ * For each line of the form "G1 X... Y... Z... A... B<val> F..." the B
+ * value is offset by `bOffset` before writing. After reading each file the
+ * function scans for the last B value written and uses it as the offset
+ * base for the next file.
+ *
+ * Parameters:
+ *   GcodeFiles  - array of file path strings, length NumFiles.
+ *   NumFiles    - number of files to combine.
+ *   OutPath     - path for the combined output file.
+ * ------------------------------------------------------------------------- */
+static void CombineGCodeFiles(const char* const* GcodeFiles,
+    int NumFiles,
+    const char* OutPath)
+{
+#define _MAX_LINE 512
+    FILE* fout;
+    int fi;
+    double bOffset = 0.0; /* cumulative B offset */
 
+    fout = fopen(OutPath, "w");
+    if (fout == NULL) {
+        fprintf(stderr, "CombineGCodeFiles: cannot open '%s'\n", OutPath);
+        return;
+    }
 
-/* Count elements inside a LIST object using the public accessor. */
+    fprintf(fout, "; Combined GCode - %d views\n\n", NumFiles);
+
+    for (fi = 0; fi < NumFiles; ++fi) {
+        FILE* fin;
+        char line[_MAX_LINE];
+        double lastB = bOffset; /* track last B seen in this view */
+
+        fin = fopen(GcodeFiles[fi], "r");
+        if (fin == NULL) {
+            fprintf(stderr, "CombineGCodeFiles: cannot open '%s'\n",
+                GcodeFiles[fi]);
+            continue;
+        }
+
+        fprintf(fout, "; === View %d start ===\n", fi);
+
+        while (fgets(line, sizeof(line), fin) != NULL) {
+            /* Check for G1 motion lines that carry a B value. */
+            if (strncmp(line, "G1 ", 3) == 0 &&
+                strstr(line, "B") != NULL &&
+                strstr(line, "X") != NULL) {
+                /* Parse the B value from the line. */
+                double x, y, z, a, b;
+                int    f;
+                if (sscanf(line, "G1 X%lf Y%lf Z%lf A%lf B%lf F%d",
+                    &x, &y, &z, &a, &b, &f) == 6) {
+                    lastB = bOffset + b;
+                    fprintf(fout, "G1 X%.3f Y%.3f Z%.3f A%.3f B%.3f F%d\n",
+                        x, y, z, a, lastB, f);
+                    continue;
+                }
+            }
+            /* Pass all other lines through unchanged. */
+            fputs(line, fout);
+        }
+
+        fclose(fin);
+
+        /* The next view's B values are offset by the last B we wrote. */
+        bOffset = lastB;
+
+        fprintf(fout, "; === View %d end ===\n\n", fi);
+    }
+
+    /* Final home command. */
+    fprintf(fout, "\nG28; Go Home\n");
+    fclose(fout);
+    printf("Combined GCode written to: %s\n", OutPath);
+#undef _MAX_LINE
+}
+
+/* ---------------------------------------------------------------------------
+ * CountListObjects - count elements in a LIST object.
+ * ------------------------------------------------------------------------- */
 static int CountListObjects(IPObjectStruct* ListObj)
 {
     int cnt = 0;
-    if (ListObj == NULL)
-        return 0;
-
+    if (ListObj == NULL) return 0;
     while (IritPrsrListObjectGet(ListObj, cnt) != NULL)
         ++cnt;
-
     return cnt;
 }
 
+/* ===========================================================================
+ * main
+ * =========================================================================== */
 #define NUM_PTS 12
-
-// Main with only direct approach.
 
 int main(void)
 {
-    /* Build a 2D half-dome outline and create a simple test solid.
-       The half-dome is a semicircular arc (y >= 0) plus a straight diameter
-       segment between the arc endpoints to close the polygon. */
-    int nArc = NUM_PTS;                          /* samples along the semicircle */
-    int nBase = IRIT_MAX(1, NUM_PTS / 8);       /* number of points along the flat base (excluding arc endpoints) */
+    /* ------------------------------------------------------------------
+     * 1. Build test solid: unit-radius half-dome (semicircle extruded in Z).
+     *    The solid will be a half-cylinder-like shape for easy silhouette
+     *    testing.
+     * ------------------------------------------------------------------ */
+    int nArc = NUM_PTS;
+    int nBase = IRIT_MAX(1, NUM_PTS / 8);
     int NumPts = nArc + nBase;
-    IrtE2PtStruct pts[NUM_PTS * 2]; /* plenty of room */
+    IrtE2PtStruct pts[NUM_PTS * 2];
+    IrtRType R = 1.0;
 
-    IrtRType R = 1.0; /* dome radius */
-    /* Sample semicircle from angle = 0..pi (right -> left) */
+    /* Semicircle arc (y >= 0). */
     for (int i = 0; i < nArc; ++i) {
         IrtRType ang = M_PI * (IrtRType)i / (IrtRType)(nArc - 1);
-        pts[i].Pt[0] = R * cos(ang);   /* x */
-        pts[i].Pt[1] = R * sin(ang);   /* y (>=0) */
+        pts[i].Pt[0] = R * cos(ang);
+        pts[i].Pt[1] = R * sin(ang);
     }
-    /* Add base (diameter) points from left endpoint back to right endpoint,
-       excluding endpoints to avoid duplicate consecutive points. */
+    /* Base segment (diameter, interior points only). */
     for (int j = 0; j < nBase; ++j) {
-        IrtRType t = (j + 1) / (IrtRType)(nBase + 1); /* in (0,1) */
-        /* map t along x from -R to +R, y = 0 */
+        IrtRType t = (j + 1) / (IrtRType)(nBase + 1);
         pts[nArc + j].Pt[0] = -R + t * (2.0 * R);
         pts[nArc + j].Pt[1] = 0.0;
     }
@@ -106,197 +190,126 @@ int main(void)
     IRIT_PT_RESET(extrDir);
     extrDir[2] = 1.0;
 
-    IPObjectStruct* Solid = IritPrsrExtrude2DPointsToSolidDir(pts, NumPts, extrDir);
-
+    IPObjectStruct* Solid = IritPrsrExtrude2DPointsToSolidDir(pts, NumPts,
+        extrDir);
     if (Solid == NULL) {
         fprintf(stderr, "Failed to create test solid.\n");
         return 1;
     }
 
     if (IritPrsrOBJSaveFile(Solid, "solid.obj", FALSE, 2, 0))
-        printf("Wrote full model to solid.obj (triangulated).\n");
+        printf("Wrote solid to solid.obj\n");
     else
-        fprintf(stderr, "Failed to write solid.obj\n");
+        fprintf(stderr, "Warning: Failed to write solid.obj\n");
 
-
-        /* Choose views using the new helper in hot_wire_cut_new_alg.c.
-       This replaces the manual construction of three canonical views. */
+    /* ------------------------------------------------------------------
+     * 2. Select best view directions.
+     * ------------------------------------------------------------------ */
     const int NumViews = 3;
     IrtHmgnMatType* Views = SelectBestViewSampling(Solid, NumViews, NULL);
     if (Views == NULL) {
-        fprintf(stderr, "SelectBestViewSampling failed to provide view matrices.\n");
+        fprintf(stderr, "SelectBestViewSampling failed.\n");
         IritPrsrFreeObject(Solid);
         return 1;
     }
 
-    /* Choose three canonical viewpoints: +X, +Y, +Z. */
-    //const int NumViews = 3;
-    //IrtHmgnMatType Views[3];
-    //{
-    //    IrtVecType Eye, Center, Up;
+    /* ------------------------------------------------------------------
+     * 3. Set up HWC machine parameters once (shared across all views).
+     * ------------------------------------------------------------------ */
+    IritPrsrHWCDataStruct HWCParams;
+    IritPrsrHWCSetDfltParams(&HWCParams);
+    HWCParams.MinimalHeight = 20.0;  /* mm above machine bed */
+    HWCParams.RuledApproxDir = CAGD_CONST_U_DIR; /* ruling = U */
+    HWCParams.PieceWiseRuledApproximation = 0.01; /* near-exact for ruled */
 
-    //    Center[0] = 0.0; Center[1] = 0.0; Center[2] = 0.0;
+    /* ------------------------------------------------------------------
+     * 4. Per-view: compute silhouette contour, build correct ruled surface,
+     *    generate GCode.
+     * ------------------------------------------------------------------ */
+     /* Track per-view GCode filenames for the combiner. */
+    char** gcodeFiles = (char**)IritMalloc(sizeof(char*) * NumViews);
+    int gcodeCount = 0;
 
-    //    /* +X */
-    //    Eye[0] = 2.0; Eye[1] = 0.0; Eye[2] = 0.0;
-    //    Up[0] = 0.0;  Up[1] = 0.0;  Up[2] = 1.0;
-    //    GenLookAtMatrix(Eye, Center, Up, Views[0]);
-
-    //    /* +Y */
-    //    Eye[0] = 0.0; Eye[1] = 2.0; Eye[2] = 0.0;
-    //    Up[0] = 0.0;  Up[1] = 0.0;  Up[2] = 1.0;
-    //    GenLookAtMatrix(Eye, Center, Up, Views[1]);
-
-    //    /* +Z (top) - use Y as Up to avoid singularity for strict top) */
-    //    Eye[0] = 0.0; Eye[1] = 0.0; Eye[2] = 2.0;
-    //    Up[0] = 0.0;  Up[1] = 1.0;  Up[2] = 0.0;
-    //    GenLookAtMatrix(Eye, Center, Up, Views[2]);
-    //}
-
-    /* ---------- REPLACEMENT: Use B-spline contour approximation per view ----------
-       For each view, compute a robust outer contour polygon using the new
-       IritPrsrApproxBSplineContourFromSolidView helper, collect them in ProjDir
-       (world-space polygons), and continue with extrusion as before.
-    */
-
-    IPObjectStruct* ProjDir = IritPrsrGenLISTObject(NULL);
-    if (ProjDir == NULL) {
-        fprintf(stderr, "Failed allocating ProjDir list\n");
-        IritPrsrFreeObject(Solid);
-        IritFree(Views);
-        return 1;
-    }
-
-    int created = 0;
     for (int vi = 0; vi < NumViews; ++vi) {
-        /* Approximate an outer contour for this view.
-           Parameters: NumCtrl=32, Iterations=80, ShrinkStep=0.25, SmoothW=0.3 */
-        IPObjectStruct* Contour = IritPrsrApproxBSplineContourFromSolidView(Solid, Views[vi], 32, 80, 0.25, 0.3);
+        char contourFile[512], gcodeFile[512];
+
+        /* 4a. Approximate outer silhouette contour from this view. */
+        IPObjectStruct* Contour = IritPrsrApproxBSplineContourFromSolidView(
+            Solid, Views[vi], 32, 80, 0.25, 0.3);
+
         if (Contour == NULL) {
-            printf("View %d: contour approximation failed\n", vi);
+            printf("View %d: contour approximation failed, skipping.\n", vi);
             continue;
         }
 
-        /* Name and append to list so later code can find view index if needed. */
-        char cname[256];
-        snprintf(cname, sizeof(cname), "proj_dir_view%d_poly%03d", vi, 0);
-        Contour->ObjName = IritMiscStrdup(cname);
-        Contour->Pnext = NULL;
-        IritPrsrListObjectAppend(ProjDir, Contour);
-        ++created;
-
-        /* Save raw contour poly for inspection. */
-        char fname[512];
-        snprintf(fname, sizeof(fname), "contour_view%d.obj", vi);
-        if (!IritPrsrOBJSaveFile(Contour, fname, FALSE, 0, 0))
-            fprintf(stderr, "Failed saving %s\n", fname);
+        /* Save the raw 2D contour polygon for inspection. */
+        snprintf(contourFile, sizeof(contourFile), "contour_view%d.obj", vi);
+        if (!IritPrsrOBJSaveFile(Contour, contourFile, FALSE, 0, 0))
+            fprintf(stderr, "Failed saving %s\n", contourFile);
         else
-            printf("Wrote %s\n", fname);
+            printf("Wrote %s\n", contourFile);
+
+        /* 4b. Build the ruled surface for the HWC machine.
+         *
+         *  IritPrsrHWCBuildSilhouetteRuledSrf:
+         *    - Projects contour to view-local 2D (ignores world Z).
+         *    - Maps 2D silhouette uniformly into FoamWidth x FoamHeight space.
+         *    - Builds extrusion surface along Y (FoamDepth).
+         *    - Tags surface with CAGD_CONST_U_DIR so HWC samples in V,
+         *      making both clamps trace the same silhouette shape in sync.
+         */
+        IPObjectStruct* RuledSrf = IritPrsrHWCBuildSilhouetteRuledSrf(
+            Contour, Views[vi], &HWCParams);
+
+        IritPrsrFreeObject(Contour);
+
+        if (RuledSrf == NULL) {
+            printf("View %d: failed to build ruled surface, skipping.\n", vi);
+            continue;
+        }
+
+        /* 4c. Generate GCode for this view's silhouette cut. */
+        snprintf(gcodeFile, sizeof(gcodeFile), "view%d_silhouette.gcode", vi);
+
+        IPObjectStruct* SimObj = IritPrsrHWCCreatePath(RuledSrf, NULL, NULL,
+            gcodeFile, &HWCParams);
+        IritPrsrFreeObject(RuledSrf);
+
+        if (SimObj != NULL) {
+            printf("View %d: GCode written to %s\n", vi, gcodeFile);
+            IritPrsrFreeObject(SimObj);
+
+            /* Store filename for the combiner. */
+            gcodeFiles[gcodeCount] = IritMiscStrdup(gcodeFile);
+            ++gcodeCount;
+        }
+        else {
+            printf("View %d: IritPrsrHWCCreatePath returned NULL "
+                "(cannot cut this silhouette).\n", vi);
+        }
     }
 
-    if (created == 0) {
-        printf("No contours produced from approximation.\n");
-        IritPrsrFreeObject(ProjDir);
-        IritPrsrFreeObject(Solid);
-        IritFree(Views);
-        return 0;
-    }
-
-    /* Extrude projected polygons in their original view directions and collect solids. */
-    IPObjectStruct* SolList = IritPrsrExtrudeSilhouetteListsToViewSolids(NULL, ProjDir, Views, NumViews, 0.5);
-    if (SolList == NULL) {
-        printf("No solids generated from projected contours.\n");
+    /* ------------------------------------------------------------------
+     * 5. Combine all per-view GCode files into one continuous flow file.
+     *    B rotation values are accumulated across views for continuity.
+     * ------------------------------------------------------------------ */
+    if (gcodeCount > 0) {
+        CombineGCodeFiles((const char* const*)gcodeFiles, gcodeCount,
+            "combined_silhouette.gcode");
     }
     else {
-        /* Save each generated solid using its ObjName (set by the extruder). */
-        char fname[1024];
-        int sidx = 0;
-        IPObjectStruct* S = NULL;
-        while ((S = IritPrsrListObjectGet(SolList, sidx)) != NULL) {
-            const char* base = S->ObjName ? S->ObjName : "dir_extr_poly";
-            snprintf(fname, sizeof(fname), "%s.obj", base);
-            if (!IritPrsrOBJSaveFile(S, fname, FALSE, 2, 0))
-                fprintf(stderr, "Failed saving %s\n", fname);
-            else
-                printf("Wrote %s\n", fname);
-            ++sidx;
-        }
+        printf("No per-view GCode was produced; combined file not written.\n");
     }
 
-    /* 6. GCode Generation Block (Only added here at the end). */
-    if (SolList != NULL) {
-        IritPrsrHWCDataStruct HWCParams;
-        IritPrsrHWCSetDfltParams(&HWCParams);
-        /* Adjust parameters to clear the machine bed and avoid Z bound errors. */
-        HWCParams.MinimalHeight = 20.0;
-        HWCParams.RuledApproxDir = CAGD_CONST_V_DIR;
-
-        int sidx = 0;
-        IPObjectStruct* S = NULL;
-        while ((S = IritPrsrListObjectGet(SolList, sidx++)) != NULL) {
-            int vi, pi;
-            /* Map the extruded solid back to its source projection polygon. */
-            if (S->ObjName && sscanf(S->ObjName, "sil_dir_view%d_poly%03d_extr", &vi, &pi) == 2) {
-                char search[256], gcname[1024];
-                snprintf(search, sizeof(search), "proj_dir_view%d_poly%03d", vi, pi);
-                IPObjectStruct* P = NULL;
-                for (int j = 0; (P = IritPrsrListObjectGet(ProjDir, j)) != NULL; j++) {
-                    if (P->ObjName && strcmp(P->ObjName, search) == 0) break;
-                }
-
-                if (P && IP_IS_POLY_OBJ(P)) {
-                    /* Create a surface representation required for HWC ruling calculations. */
-                    int n = IritPrsrVrtxListLen(P->U.Pl->PVertex);
-                    CagdCrvStruct* Crv = IritCagdBspCrvNew(n, 2, CAGD_PT_E3_TYPE);
-                    IPVertexStruct* V = P->U.Pl->PVertex;
-                    for (int k = 0; k < n; k++, V = V->Pnext) {
-                        Crv->Points[1][k] = V->Coord[0];
-                        Crv->Points[2][k] = V->Coord[1];
-                        /* Lift the object by 100mm to move it into positive machine Z space. */
-                        Crv->Points[3][k] = V->Coord[2] + 100.0;
-                    }
-                    IritCagdBspKnotUniformOpen(n, 2, Crv->KnotVector);
-
-                    CagdVecStruct Dir;
-                    IrtRType Depth = 10.0; /* Extrusion depth for HWC simulation. */
-                    Dir.Vec[0] = Views[vi][2][0] * Depth;
-                    Dir.Vec[1] = Views[vi][2][1] * Depth;
-                    Dir.Vec[2] = Views[vi][2][2] * Depth;
-
-                    CagdSrfStruct* Srf = IritCagdExtrudeSrf(Crv, &Dir);
-                    IPObjectStruct* TempSrfObj = IritPrsrGenSrfObject("temp", Srf, NULL);
-                    IritMiscAttrIDSetObjectIntAttrib(TempSrfObj, IRIT_ATTR_ID_Dir, CAGD_CONST_V_DIR);
-
-                    snprintf(gcname, sizeof(gcname), "%s.gcode", S->ObjName);
-                    IPObjectStruct* Sim = IritPrsrHWCCreatePath(TempSrfObj, NULL, NULL, gcname, &HWCParams);
-                    if (Sim) {
-                        printf("GCode successfully written to: %s\n", gcname);
-                        IritPrsrFreeObject(Sim);
-                    }
-                    else {
-                        printf("This is some wierd object I can't cut\n");
-                    }
-
-                    IritPrsrFreeObject(TempSrfObj);
-                    IritCagdCrvFree(Crv);
-                    /* DO NOT free Views here - it is used later/only freed once after all processing. */
-                }
-                else {
-                    printf("This is some wierd object I can't cut\n");
-                }
-
-            }
-        }
-    }
-
-    /* Cleanup allocated IRIT objects. */
-
-    /* Cleanup */
-    IritPrsrFreeObject(ProjDir);
+    /* ------------------------------------------------------------------
+     * 6. Cleanup.
+     * ------------------------------------------------------------------ */
+    for (int i = 0; i < gcodeCount; ++i)
+        IritFree(gcodeFiles[i]);
+    IritFree(gcodeFiles);
     IritPrsrFreeObject(Solid);
-    IritPrsrFreeObject(SolList);
     IritFree(Views);
 
-    printf("Contour-approximation silhouette test completed.\n");
+    printf("Silhouette cut test completed.\n");
     return 0;
 }
