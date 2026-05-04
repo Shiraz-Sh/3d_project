@@ -20,10 +20,6 @@
 /* ---------------------------------------------------------------------------
  * Prototypes for functions implemented in prsr_lib/hot_wire_cut_new_alg.c
  * ------------------------------------------------------------------------- */
-IPObjectStruct* IritPrsrExtrude2DPointsToSolidDir(const IrtE2PtStruct* pts,
-    int n,
-    IrtVecType Dir);
-
 IPObjectStruct* IritPrsrGetSilhouettesForViews(const IPObjectStruct* PObj,
     const IrtHmgnMatType* ViewMats,
     int NumViews,
@@ -158,65 +154,73 @@ static int CountListObjects(IPObjectStruct* ListObj)
 /* ===========================================================================
  * main
  * =========================================================================== */
-#define NUM_PTS 12
-
-int main(void)
+int main(int argc, char** argv)
 {
-    /* ------------------------------------------------------------------
-     * 1. Build test solid: unit-radius half-dome (semicircle extruded in Z).
-     *    The solid will be a half-cylinder-like shape for easy silhouette
-     *    testing.
-     * ------------------------------------------------------------------ */
-    int nArc = NUM_PTS;
-    int nBase = IRIT_MAX(1, NUM_PTS / 8);
-    int NumPts = nArc + nBase;
-    IrtE2PtStruct pts[NUM_PTS * 2];
-    IrtRType R = 1.0;
+    IPObjectStruct* RawModel;
+    IPObjectStruct* Solid;
+    IrtHmgnMatType* Views;
+    const int NumViews = 3;
+    IritPrsrHWCDataStruct HWCParams;
+    char** gcodeFiles;
+    int gcodeCount = 0;
+    int vi, i;
+    const char* inputFile = NULL;
 
-    /* Semicircle arc (y >= 0). */
-    for (int i = 0; i < nArc; ++i) {
-        IrtRType ang = M_PI * (IrtRType)i / (IrtRType)(nArc - 1);
-        pts[i].Pt[0] = R * cos(ang);
-        pts[i].Pt[1] = R * sin(ang);
-    }
-    /* Base segment (diameter, interior points only). */
-    for (int j = 0; j < nBase; ++j) {
-        IrtRType t = (j + 1) / (IrtRType)(nBase + 1);
-        pts[nArc + j].Pt[0] = -R + t * (2.0 * R);
-        pts[nArc + j].Pt[1] = 0.0;
-    }
-
-    IrtVecType extrDir;
-    IRIT_PT_RESET(extrDir);
-    extrDir[2] = 1.0;
-
-    IPObjectStruct* Solid = IritPrsrExtrude2DPointsToSolidDir(pts, NumPts,
-        extrDir);
-    if (Solid == NULL) {
-        fprintf(stderr, "Failed to create test solid.\n");
+    if (argc < 2) {
+        fprintf(stderr, "Usage: %s <input_model_file.itd>\n", argv[0]);
         return 1;
     }
+    inputFile = argv[1];
 
+    /* ------------------------------------------------------------------
+     * 1. Load 3D model from file.
+     *    IritPrsrGetObjects2 reads any IRIT-supported format (.itd, .obj,
+     *    .igs, .stl) by file extension.
+     * ------------------------------------------------------------------ */
+    printf("Loading '%s'...\n", inputFile); fflush(stdout);
+    RawModel = IritPrsrGetObjects2(inputFile);
+    if (RawModel == NULL) {
+        fprintf(stderr, "Failed to load model from '%s'.\n"
+            "Make sure the file is in the working directory.\n",
+            inputFile);
+        return 1;
+    }
+    printf("File read OK. Type = %d\n", RawModel->ObjType); fflush(stdout);
+
+    /* Convert any FreeForm surfaces (like the Dome.itd surface of revolution)
+       into a Polygonal mesh, because the contour algorithms purely operate on polygons. */
+    Solid = IritPrsrConvertFreeFormHierachy(RawModel, &IritPrsrFFCState, FALSE, FALSE);
+    RawModel = NULL;
+
+    Solid = IritPrsrFlattenTree(Solid);
+    /* FlattenTree consumes its argument and frees list headers internally if applicable.
+       Solid now represents the flattened polygonal geometry. */
+
+    printf("Model ready. Type = %d  (5 = polygon, 6 = list).\n",
+        Solid->ObjType);
+    fflush(stdout);
+
+    /* Save a copy as OBJ for visual inspection. */
+    printf("Saving solid.obj...\n"); fflush(stdout);
     if (IritPrsrOBJSaveFile(Solid, "solid.obj", FALSE, 2, 0))
-        printf("Wrote solid to solid.obj\n");
-    else
-        fprintf(stderr, "Warning: Failed to write solid.obj\n");
+        printf("Wrote solid.obj\n");
+    fflush(stdout);
 
     /* ------------------------------------------------------------------
      * 2. Select best view directions.
      * ------------------------------------------------------------------ */
-    const int NumViews = 3;
-    IrtHmgnMatType* Views = SelectBestViewSampling(Solid, NumViews, NULL);
+    printf("Selecting %d best view directions...\n", NumViews); fflush(stdout);
+    Views = SelectBestViewSampling(Solid, NumViews, NULL);
     if (Views == NULL) {
         fprintf(stderr, "SelectBestViewSampling failed.\n");
         IritPrsrFreeObject(Solid);
         return 1;
     }
+    printf("View sampling done.\n"); fflush(stdout);
 
     /* ------------------------------------------------------------------
      * 3. Set up HWC machine parameters once (shared across all views).
      * ------------------------------------------------------------------ */
-    IritPrsrHWCDataStruct HWCParams;
     IritPrsrHWCSetDfltParams(&HWCParams);
     HWCParams.MinimalHeight = 20.0;  /* mm above machine bed */
     HWCParams.RuledApproxDir = CAGD_CONST_U_DIR; /* ruling = U */
@@ -227,10 +231,9 @@ int main(void)
      *    generate GCode.
      * ------------------------------------------------------------------ */
      /* Track per-view GCode filenames for the combiner. */
-    char** gcodeFiles = (char**)IritMalloc(sizeof(char*) * NumViews);
-    int gcodeCount = 0;
+    gcodeFiles = (char**)IritMalloc(sizeof(char*) * NumViews);
 
-    for (int vi = 0; vi < NumViews; ++vi) {
+    for (vi = 0; vi < NumViews; ++vi) {
         char contourFile[512], gcodeFile[512];
 
         /* 4a. Approximate outer silhouette contour from this view. */
@@ -304,7 +307,7 @@ int main(void)
     /* ------------------------------------------------------------------
      * 6. Cleanup.
      * ------------------------------------------------------------------ */
-    for (int i = 0; i < gcodeCount; ++i)
+    for (i = 0; i < gcodeCount; ++i)
         IritFree(gcodeFiles[i]);
     IritFree(gcodeFiles);
     IritPrsrFreeObject(Solid);
