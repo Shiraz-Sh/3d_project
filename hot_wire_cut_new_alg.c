@@ -1441,8 +1441,8 @@ IPObjectStruct* IritPrsrApproxBSplineContourFromSolidView(IPObjectStruct* Solid,
     if (!IritMiscMatInverseMatrix(MatLocal, InvMat))
         return NULL;
 
-    /* Build union of projected faces in local XY */
-    IPObjectStruct* UnionLocal = BuildProjectedUnionLocal(Solid, MatLocal);
+    /* Build union of projected faces in local XY. InvMat maps World -> Local. */
+    IPObjectStruct* UnionLocal = BuildProjectedUnionLocal(Solid, InvMat);
     if (UnionLocal == NULL) {
         return NULL;
     }
@@ -1535,7 +1535,7 @@ IPObjectStruct* IritPrsrApproxBSplineContourFromSolidView(IPObjectStruct* Solid,
 
     IritFree(nextctrl);
 
-    /* Transform final control polygon back to world coords using InvMat, build closed polygon object */
+    /* Transform final control polygon back to world coords using MatLocal (Local -> World) */
     IPPolygonStruct* FinalPl = IritPrsrAllocPolygon(0, NULL, NULL);
     IPVertexStruct* FirstV = NULL;
     IPVertexStruct* PrevV = NULL;
@@ -1543,7 +1543,7 @@ IPObjectStruct* IritPrsrApproxBSplineContourFromSolidView(IPObjectStruct* Solid,
         IrtPtType worldP;
         IrtPtType localP;
         localP[0] = ctrl[i][0]; localP[1] = ctrl[i][1]; localP[2] = 0.0;
-        IritMiscMatMultPtby4by4(worldP, localP, InvMat);
+        IritMiscMatMultPtby4by4(worldP, localP, MatLocal);
         IPVertexStruct* NV = IritPrsrAllocVertex2(NULL);
         NV->Coord[0] = worldP[0];
         NV->Coord[1] = worldP[1];
@@ -1660,6 +1660,14 @@ IrtHmgnMatType* SelectBestViewSampling(IPObjectStruct* PObj,
 
     for (int i = 0; i < NumSamples; ++i) {
         scores[i] = 0.0;
+
+        /* Reject near-vertical views (where wxy_len < 0.1) since the horizontal wire
+           cannot reach the required vertical slope. */
+        IrtRType wxy_len = sqrt(ViewMats[i][2][0] * ViewMats[i][2][0] + ViewMats[i][2][1] * ViewMats[i][2][1]);
+        if (wxy_len < 0.1) {
+            continue;
+        }
+
         IPObjectStruct* Contour = IritPrsrApproxBSplineContourFromSolidView(PObj,
             ViewMats[i],
             NumCtrl,
@@ -1742,7 +1750,6 @@ IPObjectStruct* IritPrsrHWCBuildSilhouetteRuledSrf(
 {
     int k, n, guard;
     IrtRType minx, miny, maxx, maxy, scale_x, scale_z, scale, cx, cy;
-    IrtRType depth_dx, depth_dy;  /* XY unit direction for foam-depth extrusion */
     IrtVecType u_vec, v_vec, w_vec;
     IrtHmgnMatType MatLocal;
     IrtPtType* pts2d;
@@ -1793,10 +1800,9 @@ IPObjectStruct* IritPrsrHWCBuildSilhouetteRuledSrf(
     cur = V;
     guard = 0;
     for (k = 0; k < n; ++k) {
-        IrtPtType localP;
-        IritMiscMatMultPtby4by4(localP, cur->Coord, MatLocal);
-        pts2d[k][0] = localP[0];
-        pts2d[k][1] = localP[1];
+        /* Compute true dot products to project world coordinates onto the view plane. */
+        pts2d[k][0] = cur->Coord[0] * u_vec[0] + cur->Coord[1] * u_vec[1] + cur->Coord[2] * u_vec[2];
+        pts2d[k][1] = cur->Coord[0] * v_vec[0] + cur->Coord[1] * v_vec[1] + cur->Coord[2] * v_vec[2];
         pts2d[k][2] = 0.0;
         cur = cur->Pnext;
         if (cur == NULL || cur == V) break;
@@ -1825,34 +1831,24 @@ IPObjectStruct* IritPrsrHWCBuildSilhouetteRuledSrf(
     cx = 0.5 * (minx + maxx);
     cy = 0.5 * (miny + maxy);
 
-    /* 6. Determine the foam-depth extrusion direction in XY.
+    /* 6. Validate the view is horizontally cuttable.
      *
-     *  The hot-wire machine rotates the foam by angle B = atan2(wx, wy)
-     *  so the wire passes through the foam along the view direction.
-     *  IritPrsrHWCProcessRulingPair computes B from:
-     *    Angle = atan2(Crv2[X]-Crv1[X],  Crv2[Y]-Crv1[Y])
-     *  To make that equal to atan2(w_view_x, w_view_y) we must extrude
-     *  the silhouette curve along (w_view_x, w_view_y) projected to XY.
-     *
-     *  Special case: if the view is nearly vertical (looking straight
-     *  down/up), there is no meaningful XY direction -> default to +Y. */
-    {
-        IrtRType wxy_len = sqrt(w_vec[0] * w_vec[0] + w_vec[1] * w_vec[1]);
-        if (wxy_len > IRIT_EPS) {
-            depth_dx = w_vec[0] / wxy_len; /* X component of depth direction */
-            depth_dy = w_vec[1] / wxy_len; /* Y component of depth direction */
-        }
-        else {
-            depth_dx = 0.0;  /* vertical view: default to +Y (no rotation) */
-            depth_dy = 1.0;
-        }
+     *  The hot-wire machine spans the wire along the horizontal Y axis between two clamps.
+     *  Therefore it can only cleanly sweep along views where the horizontal length
+     *  of the view vector is non-negligible. We reject completely vertical views. */
+    IrtRType wxy_len = sqrt(w_vec[0] * w_vec[0] + w_vec[1] * w_vec[1]);
+    if (wxy_len < 0.1) {
+        IritFree(pts2d);
+        return NULL;
     }
 
-    /* 7. Build silhouette curve at the "front face" = offset by -depth/2
-     *    along the depth direction from the silhouette centre.
-     *   world X = sx - depth_dx * FoamDepth/2
-     *   world Y = -depth_dy * FoamDepth/2
-     *   world Z = sz  (= (lz - cy)*scale + FoamHeight/2) */
+    /* 7. Build silhouette curve mapped exactly into 3D World space.
+     *    The 2D contour is originally in the (u_vec, v_vec) plane of the view.
+     *    We rebuild the exact 3D orientation.
+     *
+     *    The extruded surface must be aligned with w_vec in 3D.
+     *    The start of the extrusion will be -w_vec * FoamDepth/2.
+     *    We also shift the entire cut upwards to be centered in the foam block. */
     Crv = IritCagdBspCrvNew(n, 2, CAGD_PT_E3_TYPE);
     if (Crv == NULL) {
         IritFree(pts2d);
@@ -1861,24 +1857,43 @@ IPObjectStruct* IritPrsrHWCBuildSilhouetteRuledSrf(
 
     for (k = 0; k < n; ++k) {
         IrtRType sx = (pts2d[k][0] - cx) * scale;
-        IrtRType sz = (pts2d[k][1] - cy) * scale + Params->FoamHeight * 0.5;
-        Crv->Points[1][k] = sx - depth_dx * Params->FoamDepth * 0.5;
-        Crv->Points[2][k] = -depth_dy * Params->FoamDepth * 0.5;
-        Crv->Points[3][k] = sz;
+        IrtRType sy = (pts2d[k][1] - cy) * scale;
+
+        /* Map back to 3D world coordinates. */
+        IrtRType wx = sx * u_vec[0] + sy * v_vec[0];
+        IrtRType wy = sx * u_vec[1] + sy * v_vec[1];
+        IrtRType wz = sx * u_vec[2] + sy * v_vec[2];
+
+        /* To bypass a critical math bug in the legacy hot_wire_cut.c logic,
+         * we must pre-extrapolate the Z-coordinate. The legacy code computes:
+         *   a_buggy = Crv2_Z + slope * Crv2_Y_rot
+         *   z_buggy = a_buggy - slope * MACHINE_MAX_Y (where MACHINE_MAX_Y is 390.0)
+         * But the correct math for extrapolating to Y = +/- 195.0 is:
+         *   a_target = Crv2_Z + slope * (195.0 - Crv2_Y_rot)
+         * By setting a_buggy = a_target, we can algebraically derive the exact Z shift
+         * needed per-point to cancel the bug out completely.
+         *   z_shift = slope * (195.0 - 2 * Crv2_Y_rot)
+         * After substituting Crv2_Y_rot = -wz * slope + wxy_len * FoamDepth / 2, we get:
+         */
+        IrtRType slope = w_vec[2] / wxy_len;
+        IrtRType z_shift = slope * (195.0 - wxy_len * Params->FoamDepth) + 2.0 * wz * slope * slope;
+
+        Crv->Points[1][k] = wx - w_vec[0] * Params->FoamDepth * 0.5;
+        Crv->Points[2][k] = wy - w_vec[1] * Params->FoamDepth * 0.5;
+        Crv->Points[3][k] = wz - w_vec[2] * Params->FoamDepth * 0.5 + Params->FoamHeight * 0.5 + z_shift;
     }
     IritCagdBspKnotUniformOpen(n, 2, Crv->KnotVector);
 
     IritFree(pts2d);
 
-    /* 8. Extrude along the view's XY direction by FoamDepth.
-     *    After extrusion:
-     *      S(u, vMin): Crv1[X] = sx - depth_dx*FoamDepth/2,  Crv1[Y] = -depth_dy*FoamDepth/2
-     *      S(u, vMax): Crv2[X] = sx + depth_dx*FoamDepth/2,  Crv2[Y] = +depth_dy*FoamDepth/2
-     *    => Dx = depth_dx*FoamDepth,  Dy = depth_dy*FoamDepth
-     *    => Angle = atan2(depth_dx, depth_dy) = atan2(w_view_x, w_view_y) = B ✓ */
-    YDir.Vec[0] = depth_dx * Params->FoamDepth;
-    YDir.Vec[1] = depth_dy * Params->FoamDepth;
-    YDir.Vec[2] = 0.0;
+    /* 8. Extrude exactly along the true 3D view direction by FoamDepth.
+     *    This creates a cylinder (surface) whose rulings are exactly w_vec.
+     *    When IritPrsrHWCProcessRulingPair processes this surface, it computes
+     *    Angle = atan2(Dx, Dy) = atan2(w_vec[0], w_vec[1]), and rotates the
+     *    clamps accordingly to perfectly align the Y-axis of the machine with w_vec. */
+    YDir.Vec[0] = w_vec[0] * Params->FoamDepth;
+    YDir.Vec[1] = w_vec[1] * Params->FoamDepth;
+    YDir.Vec[2] = w_vec[2] * Params->FoamDepth;
 
     Srf = IritCagdExtrudeSrf(Crv, &YDir);
     IritCagdCrvFree(Crv);
