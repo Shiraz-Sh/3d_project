@@ -1,3 +1,44 @@
+/*****************************************************************************
+* Generates 5-Axis Hot-Wire Cutter tool paths using Visual Hull Extrusion.   *
+******************************************************************************
+* (C) Gershon Elber, Technion, Israel Institute of Technology                *
+******************************************************************************
+* Written by:  Shiraz Shmulman and Dani Rifkind       Ver 1.0, May 2026      *
+******************************************************************************
+* ALGORITHM OVERVIEW:                                                        *
+*                                                                            *
+* This module implements a novel 5-axis hot-wire cutting algorithm based on  *
+* silhouette volume intersection. It evaluates optimal viewing directions    *
+* for a given 3D object (in xy plane), extracts the 2D projected silhouette  *
+* from each view, and extrudes that silhouette into a 3D ruled surface       *
+* aligned with the true 3D viewing direction. By sequencing these views      *
+* and rotating the foam on the machine's rotary axis (B), the machine cuts   *
+* out the visual hull of the target 3D object.                               *
+*                                                                            *
+* CONVECTIONS:                                                               *
+*                                                                            *
+* 1. All functions have the prefix of HWC                                    *
+*                                                                            *
+* MACHINE COORDINATE SYSTEM & INFORMATION:                                   *
+*                                                                            *
+* - Origin (0,0,0): Back-Right-Bottom corner of the machine volume.          *
+*                                                                            *
+* - Axes interpretation:                                                     *
+*   X : Left clamp horizontal position.                                      *
+*   Y : Right clamp horizontal position.                                     *
+*   Z : Left clamp vertical position.                                        *
+*   A : Right clamp vertical position.                                       *
+*   B : Foam rotation angle (rotary table) in degrees.                       *
+*                                                                            *
+* - Physical dimensions (in mm):                                             *
+*   MACHINE_MAX_X = 390.0                                                    *
+*   MACHINE_MAX_Y = 390.0                                                    *
+*   MACHINE_MAX_Z = 340.0                                                    *
+*   Default Foam Size = 135.0 (W) x 135.0 (D) x 135.0 (H) mm                 *
+*                                                                            *
+* NOTE: All coordinates and dimensions generated are in millimeters (mm).    *
+*****************************************************************************/
+
 #include <stdio.h>
 #include <ctype.h>
 #include <math.h>
@@ -596,7 +637,7 @@ static IPObjectStruct *HWCBuildProjectUnionLocal(IPObjectStruct *Solid,
 * SEE ALSO:                                                                  *
 * HWCBuildProjectUnionLocal (low-level grid rasterization),                  *
 * HWCIritPrsrBuildViewBasisFromMat (view frame extraction),                  *
-* IritPrsrHWCBuildSilhouetteRuledSrf (contour to ruled surface),             *
+* HWCBuildSilhouetteRuledSrf (contour to ruled surface),             *
 * HWCSelectBestViewSampling (multi-view contour scoring).                    *
 *****************************************************************************/
 static IPObjectStruct *HWCIritPrsrApproxBSplineContourFromSolidView(
@@ -1126,7 +1167,7 @@ static IrtRType HWCDistPointSegment2D(IrtPtType P,
 * Return: IPObjectStruct* (surface) on success, NULL on failure.             *
 *         Caller owns the returned object and must free it.                  *
 *****************************************************************************/
-static IPObjectStruct *IritPrsrHWCBuildSilhouetteRuledSrf(
+static IPObjectStruct *HWCBuildSilhouetteRuledSrf(
     const IPObjectStruct *Contour,
     const IPObjectStruct *Solid,
     const IrtHmgnMatType ViewMat,
@@ -1599,12 +1640,12 @@ static void HWCConvertPolylinesToPolygons(IPObjectStruct *PObj) {
 *   int: 1 on success, 0 on failure.                                         M
 *                                                                            *
 * SEE ALSO:                                                                  M
-*   IritPrsrHWCCreatePath, IritPrsrHWCBuildSilhouetteRuledSrf                M
+*   IritPrsrHWCCreatePath, HWCBuildSilhouetteRuledSrf                M
 *                                                                            *
 * KEYWORDS:                                                                  M
-*   IritPrsrHWCGenerateGCodeFromObj, hot-wire, GCode, pipeline.              M
+*   HWCGenerateGCodeFromObj, hot-wire, GCode, pipeline.              M
 *****************************************************************************/
-int IritPrsrHWCGenerateGCodeFromObj(IPObjectStruct *RawModel,
+int HWCGenerateGCodeFromObj(IPObjectStruct *RawModel,
     const char *OutputGCodePath,
     int NumViews,
     int OutputITDType,
@@ -1622,7 +1663,7 @@ int IritPrsrHWCGenerateGCodeFromObj(IPObjectStruct *RawModel,
 
     if (RawModel == NULL || OutputGCodePath == NULL || NumViews <= 0) {
         fprintf(stderr,
-            "IritPrsrHWCGenerateGCodeFromObj: invalid parameters.\n");
+            "HWCGenerateGCodeFromObj: invalid parameters.\n");
         return 0;
     }
 
@@ -1751,7 +1792,7 @@ int IritPrsrHWCGenerateGCodeFromObj(IPObjectStruct *RawModel,
         printf("  View %d: Building ruled surface...\n", vi);
         fflush(stdout);
         #endif /* DEBUG */
-        RuledSrf = IritPrsrHWCBuildSilhouetteRuledSrf(Contour, Solid, Views[vi],
+        RuledSrf = HWCBuildSilhouetteRuledSrf(Contour, Solid, Views[vi],
             &HWCParams);
         IritPrsrFreeObject(Contour);
         Contour = NULL;
