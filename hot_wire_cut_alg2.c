@@ -54,7 +54,7 @@
 #include "inc_irit/ip_cnvrt.h"
 
 #include "prsr_loc.h"
-#define SIL_GRID_RES 1024
+#define HWCSIL_GRID_RES 1024
 
 
 /*****************************************************************************
@@ -347,8 +347,8 @@ static IPObjectStruct *HWCBuildProjectUnionLocal(IPObjectStruct *Solid,
     dy = maxy - miny;
 
     /* 2. Allocate and clear 2D grid */
-    grid = (unsigned char *) IritMalloc(SIL_GRID_RES * SIL_GRID_RES);
-    memset(grid, 0, SIL_GRID_RES * SIL_GRID_RES);
+    grid = (unsigned char *) IritMalloc(HWCSIL_GRID_RES * HWCSIL_GRID_RES);
+    memset(grid, 0, HWCSIL_GRID_RES * HWCSIL_GRID_RES);
 
     /* Assume max polygon vertex count <= 4096 */
     px = (int *) IritMalloc(sizeof(int) * 4096); 
@@ -373,16 +373,16 @@ static IPObjectStruct *HWCBuildProjectUnionLocal(IPObjectStruct *Solid,
 
             IritMiscMatMultPtby4by4(localP, cur -> Coord, MatLocal);
 
-            px_val = (int) ((localP[0] - minx) / dx * (SIL_GRID_RES - 1));
-            py_val = (int) ((localP[1] - miny) / dy * (SIL_GRID_RES - 1));
+            px_val = (int) ((localP[0] - minx) / dx * (HWCSIL_GRID_RES - 1));
+            py_val = (int) ((localP[1] - miny) / dy * (HWCSIL_GRID_RES - 1));
             if (px_val < 0)
                 px_val = 0; 
-            if (px_val >= SIL_GRID_RES)
-                px_val = SIL_GRID_RES - 1;
+            if (px_val >= HWCSIL_GRID_RES)
+                px_val = HWCSIL_GRID_RES - 1;
             if (py_val < 0)
                 py_val = 0; 
-            if (py_val >= SIL_GRID_RES)
-                py_val = SIL_GRID_RES - 1;
+            if (py_val >= HWCSIL_GRID_RES)
+                py_val = HWCSIL_GRID_RES - 1;
 
             if (npts < 4096) {
                 px[npts] = px_val;
@@ -398,7 +398,7 @@ static IPObjectStruct *HWCBuildProjectUnionLocal(IPObjectStruct *Solid,
             continue;
 
         /* Scanline logic */
-        pminy = SIL_GRID_RES;
+        pminy = HWCSIL_GRID_RES;
         pmaxy = -1;
         for (i = 0; i < npts; ++i) {
             if (py[i] < pminy) 
@@ -450,10 +450,10 @@ static IPObjectStruct *HWCBuildProjectUnionLocal(IPObjectStruct *Solid,
 
                     if (x_start < 0)
                         x_start = 0;
-                    if (x_end >= SIL_GRID_RES)
-                        x_end = SIL_GRID_RES - 1;
+                    if (x_end >= HWCSIL_GRID_RES)
+                        x_end = HWCSIL_GRID_RES - 1;
                     for (x_val = x_start; x_val <= x_end; ++x_val) {
-                        grid[y * SIL_GRID_RES + x_val] = 1;
+                        grid[y * HWCSIL_GRID_RES + x_val] = 1;
                     }
                 }
             }
@@ -465,9 +465,9 @@ static IPObjectStruct *HWCBuildProjectUnionLocal(IPObjectStruct *Solid,
     IritFree(ints);
 
     /* 4. Find starting pixel for Moore Neighborhood Tracing. */
-    for (y = 0; y < SIL_GRID_RES; ++y) {
-        for (x = 0; x < SIL_GRID_RES; ++x) {
-            if (grid[y * SIL_GRID_RES + x]) {
+    for (y = 0; y < HWCSIL_GRID_RES; ++y) {
+        for (x = 0; x < HWCSIL_GRID_RES; ++x) {
+            if (grid[y * HWCSIL_GRID_RES + x]) {
                 startX = x;
                 startY = y;
                 break;
@@ -486,7 +486,7 @@ static IPObjectStruct *HWCBuildProjectUnionLocal(IPObjectStruct *Solid,
         int m_dx[8] = { 0, 1, 1, 1, 0, -1, -1, -1 };
         int m_dy[8] = { -1, -1, 0, 1, 1, 1, 0, -1 };
 
-        int max_path = SIL_GRID_RES * SIL_GRID_RES;
+        int max_path = HWCSIL_GRID_RES * HWCSIL_GRID_RES;
         int *pathX = (int *) IritMalloc(sizeof(int) * max_path);
         int *pathY = (int *) IritMalloc(sizeof(int) * max_path);
         int path_len = 0;
@@ -515,8 +515,8 @@ static IPObjectStruct *HWCBuildProjectUnionLocal(IPObjectStruct *Solid,
                 nx = cx + m_dx[next_dir];
                 ny = cy + m_dy[next_dir];
 
-                if (nx >= 0 && nx < SIL_GRID_RES && ny >= 0 && ny < SIL_GRID_RES) {
-                    if (grid[ny * SIL_GRID_RES + nx]) {
+                if (nx >= 0 && nx < HWCSIL_GRID_RES && ny >= 0 && ny < HWCSIL_GRID_RES) {
+                    if (grid[ny * HWCSIL_GRID_RES + nx]) {
                         cx = nx;
                         cy = ny;
                         dir = next_dir;
@@ -553,8 +553,8 @@ static IPObjectStruct *HWCBuildProjectUnionLocal(IPObjectStruct *Solid,
 
             for (i_path = 0; i_path < path_len; ++i_path) {
                 IPVertexStruct *NV = IritPrsrAllocVertex2(NULL);
-                NV -> Coord[0] = minx + pathX[i_path] * dx / (SIL_GRID_RES - 1);
-                NV -> Coord[1] = miny + pathY[i_path] * dy / (SIL_GRID_RES - 1);
+                NV -> Coord[0] = minx + pathX[i_path] * dx / (HWCSIL_GRID_RES - 1);
+                NV -> Coord[1] = miny + pathY[i_path] * dy / (HWCSIL_GRID_RES - 1);
                 NV -> Coord[2] = 0.0;
                 if (FirstV == NULL) FirstV = PrevV = NV;
                 else { PrevV -> Pnext = NV; PrevV = NV; }
