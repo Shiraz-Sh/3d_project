@@ -6,9 +6,11 @@
 #include "inc_irit/iritprsr.h"
 
 /* Prototype for main GCode generation function from hot_wire_cut_new_alg.c */
-int IritPrsrHWCGenerateGCodeFromFile(const char* InputModelPath,
+int IritPrsrHWCGenerateGCodeFromObj(IPObjectStruct *RawModel,
     const char* OutputGCodePath,
-    int NumViews);
+    int NumViews,
+    int OutputITDType,
+    double ITDLength);
 
 /* ===========================================================================
  * main
@@ -19,7 +21,7 @@ int main(int argc, char** argv)
 {
     const char* inputFile = NULL;
     const char* outputFile = "combined_silhouette.gcode";
-    const int NumViews = 5;
+    const int NumViews = 10;
     int result;
 
     if (argc < 2) {
@@ -31,13 +33,17 @@ int main(int argc, char** argv)
     inputFile = argv[1];
 
     /* Call the main GCode generation function */
-    #ifdef DEBUG
     printf("========================================\n");
     printf("Hot-Wire Cut GCode Generator\n");
     printf("========================================\n\n");
-    #endif /* DEBUG */
 
-    result = IritPrsrHWCGenerateGCodeFromFile(inputFile, outputFile, NumViews);
+    IPObjectStruct *RawModel = IritPrsrGetObjects2(inputFile);
+    if (RawModel == NULL) {
+        fprintf(stderr, "Failed to load model from '%s'.\n", inputFile);
+        return 1;
+    }
+
+    result = IritPrsrHWCGenerateGCodeFromObj(RawModel, outputFile, NumViews, 1, 0.0);
 
     if (result) {
         printf("\n========================================\n");
