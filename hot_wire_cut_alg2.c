@@ -15,7 +15,7 @@
 * and rotating the foam on the machine's rotary axis (B), the machine cuts   *
 * out the visual hull of the target 3D object.                               *
 *                                                                            *
-* CONVECTIONS:                                                               *
+* CONVENTIONS:                                                               *
 *                                                                            *
 * 1. All functions have the prefix of HWC                                    *
 *                                                                            *
@@ -284,7 +284,7 @@ static IrtRType HWCCalcPolygonArea(IPObjectStruct *PObj)
 * HWCIritPrsrBuildViewBasisFromMat (constructs MatLocal).                    *
 *****************************************************************************/
 static IPObjectStruct *HWCBuildProjectUnionLocal(IPObjectStruct *Solid,
-    const IrtHmgnMatType MatLocal)
+                                                 const IrtHmgnMatType MatLocal)
 {
     IrtRType 
         minx = IRIT_INFNTY,
@@ -600,14 +600,15 @@ static IPObjectStruct *HWCBuildProjectUnionLocal(IPObjectStruct *Solid,
 * Contour closely approximates the visual silhouette boundary as seen        *
 * from the given viewpoint.                                                  *
 *                                                                            *
-* Algorithm: (1) extracts orthonormal basis (u, v, w) from view matrix;      *
-* (2) builds view-local transformation mapping world to local XY plane;      *
-* (3) rasterizes solid into 1024×1024 grid, extracts boundary via Moore      *
-* neighborhood tracing, producing high-resolution pixel-level contour;       *
-* (4) applies Laplacian smoothing to remove pixel stair-stepping artifacts;  *
-* (5) subsamples points to requested count (NumCtrl);                        *
-* (6) transforms back to world coordinates using inverse view matrix;        *
-* (7) returns closed polygon in world frame, ready for further processing.   *
+* Algorithm:                                                                 *
+* 1: Extracts orthonormal basis (u, v, w) from view matrix.                  *
+* 2: Builds view-local transformation mapping world to local XY plane.       *
+* 3: Rasterizes solid into 1024×1024 grid, extracts boundary via Moore       *
+*    neighborhood tracing, producing high-resolution pixel-level contour.    *
+* 4: Applies Laplacian smoothing to remove pixel stair-stepping artifacts.   *
+* 5: Subsamples points to requested count (NumCtrl).                         *
+* 6: Transforms back to world coordinates using inverse view matrix.         *
+* 7: Returns closed polygon in world frame, ready for further processing.    *
 *                                                                            *
 * PARAMETERS:                                                                *
 * Solid: IPObjectStruct pointer to valid polygonal object (checked           *
@@ -623,9 +624,9 @@ static IPObjectStruct *HWCBuildProjectUnionLocal(IPObjectStruct *Solid,
 * RETURN VALUE:                                                              *
 * IPObjectStruct *: Newly allocated POLY object in world coordinates with    *
 *                   closed contour polygon, or NULL on failure (NULL input,  *
-*                   invalid matrix, degenerate projection, allocation failure*
-*                   or insufficient boundary points). Caller owns returned   *
-*                   object and must free via IritPrsrFreeObject().           *
+*                   invalid matrix, degenerate projection, allocation        *
+*                   failure or insufficient boundary points). Caller owns    *
+*                   returned object and must free via IritPrsrFreeObject().  *
 *                                                                            *
 * PERFORMANCE:                                                               *
 * - Time: O(V + G) where V = total vertices, G = grid area (1M operations).  *
@@ -637,13 +638,12 @@ static IPObjectStruct *HWCBuildProjectUnionLocal(IPObjectStruct *Solid,
 * SEE ALSO:                                                                  *
 * HWCBuildProjectUnionLocal (low-level grid rasterization),                  *
 * HWCIritPrsrBuildViewBasisFromMat (view frame extraction),                  *
-* HWCBuildSilhouetteRuledSrf (contour to ruled surface),             *
+* HWCBuildSilhouetteRuledSrf (contour to ruled surface),                     *
 * HWCSelectBestViewSampling (multi-view contour scoring).                    *
 *****************************************************************************/
-static IPObjectStruct *HWCIritPrsrApproxBSplineContourFromSolidView(
-    IPObjectStruct *Solid,
-    const IrtHmgnMatType ViewMat,
-    int NumCtrl)
+static IPObjectStruct *HWCIritPrsrApproxBSplineContourFromSolidView(IPObjectStruct *Solid,
+                                                                    const IrtHmgnMatType ViewMat,
+                                                                    int NumCtrl)
 {
     IrtVecType u, v, w;
     IrtHmgnMatType MatLocal, InvMat;
@@ -812,8 +812,8 @@ static IPObjectStruct *HWCIritPrsrApproxBSplineContourFromSolidView(
 * HWCCalcPolygonArea.                                                        *
 *****************************************************************************/
 static IrtHmgnMatType *HWCSelectBestViewSampling(IPObjectStruct *PObj,
-    int NumSamples,
-    IrtHmgnMatType *ResultMat)
+                                                 int NumSamples,
+                                                 IrtHmgnMatType *ResultMat)
 {
     int next, s, i, j, best;
     IrtHmgnMatType *ViewMats;
@@ -916,11 +916,11 @@ typedef struct IritPrsrHWCEdgeStruct {
 } IritPrsrHWCEdgeStruct;
 
 /*****************************************************************************
-* AUXILIARY:								     *
+* AUXILIARY:								                                 *
 * Auxiliary function to find missing boundary edges in an open solid.	     *
 *****************************************************************************/
 static IritPrsrHWCEdgeStruct *HWCFindBoundaryEdges(const IPObjectStruct *Solid,
-    int *OutNumEdges)
+                                                   int *OutNumEdges)
 {
     int i, j, k, StackTop, CurrentLoopCount,
         MaxEdges = 0,
@@ -1103,12 +1103,12 @@ static IritPrsrHWCEdgeStruct *HWCFindBoundaryEdges(const IPObjectStruct *Solid,
 
 
 /*****************************************************************************
-* AUXILIARY:								     *
-* Auxiliary function to calculate point to segment distance in 2D.	     *
+* AUXILIARY:								                                 *
+* Auxiliary function to calculate point to segment distance in 2D.	         *
 *****************************************************************************/
 static IrtRType HWCDistPointSegment2D(IrtPtType P,
-    IrtPtType A,
-    IrtPtType B)
+                                      IrtPtType A,
+                                      IrtPtType B)
 {
     IrtRType
         L2 = IRIT_SQR(A[0] - B[0]) + IRIT_SQR(A[1] - B[1]);
@@ -1150,28 +1150,29 @@ static IrtRType HWCDistPointSegment2D(IrtPtType P,
 *   1. Project each contour vertex into view-local 2D (ignoring world Z).    *
 *   2. Compute AABB and scale uniformly to fit FoamWidth x FoamHeight        *
 *      with a 10% safety margin, centered at the machine origin.             *
-*   3. Build an E3 B-spline curve: X=local_u_scaled, Z=local_v_scaled+FoamH/2*
+*   3. Build an E3 B-spline curve: X=local_u_scaled,                         *
+*                                  Z=local_v_scaled+FoamH/2                  *
 *      Y=-FoamDepth/2 (front face relative to foam center).                  *
 *   4. Extrude the curve along (0, FoamDepth, 0) to get S(u,v).              *
 *   5. Tag with IRIT_ATTR_ID_Dir = CAGD_CONST_U_DIR so IritPrsrHWCCreatePath *
 *      samples in V direction (silhouette), giving both clamps the full      *
 *      silhouette path in sync.                                              *
 *                                                                            *
-* Parameters:                                                                *
-*   Contour: polygon object from                                             *
+* PARAMETERS:                                                                *
+*   Contour: Polygon object from                                             *
 *            HWCIritPrsrApproxBSplineContourFromSolidView.                   *
-*   Solid: the original 3D polygonal solid used to find missing boundaries.  *
-*   ViewMat: view matrix (row 2 = forward/view direction).                   *
+*   Solid: The original 3D polygonal solid used to find missing boundaries.  *
+*   ViewMat: View matrix (row 2 = forward/view direction).                   *
 *   Params: HWC machine parameters; uses FoamWidth, FoamHeight, FoamDepth.   *
 *                                                                            *
-* Return: IPObjectStruct* (surface) on success, NULL on failure.             *
+* RETRUN VALUE:                                                              *
+* IPObjectStruct*: Surface on success, NULL on failure.                      *
 *         Caller owns the returned object and must free it.                  *
 *****************************************************************************/
-static IPObjectStruct *HWCBuildSilhouetteRuledSrf(
-    const IPObjectStruct *Contour,
-    const IPObjectStruct *Solid,
-    const IrtHmgnMatType ViewMat,
-    const IritPrsrHWCDataStruct *Params)
+static IPObjectStruct *HWCBuildSilhouetteRuledSrf(const IPObjectStruct *Contour,
+                                                  const IPObjectStruct *Solid,
+                                                  const IrtHmgnMatType ViewMat,
+                                                  const IritPrsrHWCDataStruct *Params)
 {
     int k, n, guard;
     IrtRType minx, miny, maxx, maxy, scale_x, scale_z, scale, cx, cy;
@@ -1488,9 +1489,9 @@ static IPObjectStruct *HWCBuildSilhouetteRuledSrf(
 * Auxiliary function to combine per-view GCode files into one.               *
 *****************************************************************************/
 static void HWCCombineGCodeFiles(const char *const* GcodeFiles,
-    int NumFiles,
-    const char *OutPath,
-    const IritPrsrHWCDataStruct *Params)
+                                 int NumFiles,
+                                 const char *OutPath,
+                                 const IritPrsrHWCDataStruct *Params)
 {
 #define IRIT_MAX_LINE_LEN 512
     FILE* fout, * fin;
@@ -1640,16 +1641,16 @@ static void HWCConvertPolylinesToPolygons(IPObjectStruct *PObj) {
 *   int: 1 on success, 0 on failure.                                         M
 *                                                                            *
 * SEE ALSO:                                                                  M
-*   IritPrsrHWCCreatePath, HWCBuildSilhouetteRuledSrf                M
+*   IritPrsrHWCCreatePath, HWCBuildSilhouetteRuledSrf                        M
 *                                                                            *
 * KEYWORDS:                                                                  M
-*   HWCGenerateGCodeFromObj, hot-wire, GCode, pipeline.              M
+*   HWCGenerateGCodeFromObj, hot-wire, GCode, pipeline.                      M
 *****************************************************************************/
 int HWCGenerateGCodeFromObj(IPObjectStruct *RawModel,
-    const char *OutputGCodePath,
-    int NumViews,
-    int OutputITDType,
-    double ITDLength)
+                            const char *OutputGCodePath,
+                            int NumViews,
+                            int OutputITDType,
+                            double ITDLength)
 {
     IPObjectStruct *Contour, *RuledSrf, *SimObj, *AllSimObjs,
         *Solid = NULL;
