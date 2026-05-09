@@ -56,6 +56,54 @@
 #include "prsr_loc.h"
 #define HWCSIL_GRID_RES 1024
 
+static int HWCIritPrsrBuildViewBasisFromMat(const IrtHmgnMatType Mat,
+                                            IrtVecType u,
+                                            IrtVecType v,
+                                            IrtVecType w,
+                                            int AllowDefault);
+
+static void HWCGenLookAtMatrix(IrtVecType Eye,
+                               IrtVecType Center,
+                               IrtVecType Up,
+                               IrtHmgnMatType Mat);
+
+static IrtRType HWCCalcPolygonArea(IPObjectStruct *PObj);
+
+static IPObjectStruct *HWCBuildProjectUnionLocal(IPObjectStruct *Solid,
+                                                 const IrtHmgnMatType MatLocal);
+
+static IPObjectStruct *HWCIritPrsrApproxBSplineContourFromSolidView(IPObjectStruct *Solid,
+                                                                    const IrtHmgnMatType ViewMat,
+                                                                    int NumCtrl);
+
+static IrtHmgnMatType *HWCSelectBestViewSampling(IPObjectStruct *PObj,
+                                                 int NumSamples,
+                                                 IrtHmgnMatType *ResultMat);
+
+static IritPrsrHWCEdgeStruct *HWCFindBoundaryEdges(const IPObjectStruct *Solid,
+                                                   int *OutNumEdges);
+
+static IrtRType HWCDistPointSegment2D(IrtPtType P,
+                                      IrtPtType A,
+                                      IrtPtType B);
+
+static IPObjectStruct *HWCBuildSilhouetteRuledSrf(const IPObjectStruct *Contour,
+                                                  const IPObjectStruct *Solid,
+                                                  const IrtHmgnMatType ViewMat,
+                                                  const IritPrsrHWCDataStruct *Params);
+                                                
+static void HWCCombineGCodeFiles(const char *const* GcodeFiles,
+                                 int NumFiles,
+                                 const char *OutPath,
+                                 const IritPrsrHWCDataStruct *Params);
+
+static void HWCConvertPolylinesToPolygons(IPObjectStruct *PObj);
+
+int HWCGenerateGCodeFromObj(IPObjectStruct *RawModel,
+                            const char *OutputGCodePath,
+                            int NumViews,
+                            int OutputITDType,
+                            double ITDLength);
 
 /*****************************************************************************
 * AUXILIARY:                                                                 *
