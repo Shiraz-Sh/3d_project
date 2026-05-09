@@ -139,7 +139,6 @@ static int HWCIritPrsrBuildViewBasisFromMat(const IrtHmgnMatType Mat,
     return 1;
 }
 
-
 /*****************************************************************************
 * DESCRIPTION:                                                               *
 * Generate a LookAt matrix from eye position, center, and up vector.         *
@@ -592,7 +591,6 @@ static IPObjectStruct *HWCBuildProjectUnionLocal(IPObjectStruct *Solid,
     }
 }
 
-
 /*****************************************************************************
 * DESCRIPTION:                                                               *
 * Approximate visible silhouette contour of polygonal solid from given view. *
@@ -771,8 +769,6 @@ static IPObjectStruct *HWCIritPrsrApproxBSplineContourFromSolidView(IPObjectStru
     return FinalObj;
 }
 
-
-
 /*****************************************************************************
 * DESCRIPTION:                                                               *
 * Select optimal viewing directions for hot-wire silhouette cutting using    *
@@ -911,7 +907,6 @@ static IrtHmgnMatType *HWCSelectBestViewSampling(IPObjectStruct *PObj,
     IritFree(scores);
     return ViewMats;
 }
-
 
 typedef struct IritPrsrHWCEdgeStruct {
     IrtPtType Pt1;
@@ -1104,7 +1099,6 @@ static IritPrsrHWCEdgeStruct *HWCFindBoundaryEdges(const IPObjectStruct *Solid,
     return BestLoopEdges;
 }
 
-
 /*****************************************************************************
 * AUXILIARY:								                                 *
 * Auxiliary function to calculate point to segment distance in 2D.	         *
@@ -1135,7 +1129,6 @@ static IrtRType HWCDistPointSegment2D(IrtPtType P,
         return sqrt(IRIT_SQR(P[0] - Proj[0]) + IRIT_SQR(P[1] - Proj[1]));
     }
 }
-
 
 /*****************************************************************************
 * DESCRIPTION:                                                               *
@@ -1483,8 +1476,6 @@ static IPObjectStruct *HWCBuildSilhouetteRuledSrf(const IPObjectStruct *Contour,
 
     return SrfObj;
 }
-
-
 
 /*****************************************************************************
 * AUXILIARY:                                                                 *
