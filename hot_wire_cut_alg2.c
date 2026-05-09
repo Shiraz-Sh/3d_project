@@ -301,7 +301,7 @@ static IPObjectStruct *HWCBuildProjectUnionLocal(IPObjectStruct *Solid,
     if (Solid == NULL || !IP_IS_POLY_OBJ(Solid))
         return NULL;
 
-    /* 1. Project points to local XY, collect them to compute bounding box */
+    /* 1. Project points to local XY, collect them to compute bounding box. */
     for (Pl = Solid -> U.Pl; Pl != NULL; Pl = Pl -> Pnext) {
         IPVertexStruct *cur,
             *V = Pl -> PVertex;
@@ -332,7 +332,7 @@ static IPObjectStruct *HWCBuildProjectUnionLocal(IPObjectStruct *Solid,
     if (minx > maxx) 
         return NULL;
 
-    /* Add a small 5% margin to prevent tracing out of bounds */
+    /* Add a small 5% margin to prevent tracing out of bounds. */
     dx = maxx - minx;
     dy = maxy - miny;
     margin = IRIT_MAX(dx, dy) * 0.05;
@@ -345,16 +345,16 @@ static IPObjectStruct *HWCBuildProjectUnionLocal(IPObjectStruct *Solid,
     dx = maxx - minx;
     dy = maxy - miny;
 
-    /* 2. Allocate and clear 2D grid */
+    /* 2. Allocate and clear 2D grid. */
     grid = (unsigned char *) IritMalloc(HWCSIL_GRID_RES * HWCSIL_GRID_RES);
     memset(grid, 0, HWCSIL_GRID_RES * HWCSIL_GRID_RES);
 
-    /* Assume max polygon vertex count <= 4096 */
+    /* Assume max polygon vertex count <= 4096. */
     px = (int *) IritMalloc(sizeof(int) * 4096); 
     py = (int *) IritMalloc(sizeof(int) * 4096);
     ints = (int *) IritMalloc(sizeof(int) * 4096);
 
-    /* 3. Scanline fill each projected polygon */
+    /* 3. Scanline fill each projected polygon. */
     for (Pl = Solid -> U.Pl; Pl != NULL; Pl = Pl -> Pnext) {
         IPVertexStruct *cur,
             *V = Pl -> PVertex;
@@ -480,7 +480,7 @@ static IPObjectStruct *HWCBuildProjectUnionLocal(IPObjectStruct *Solid,
         return NULL;
     }
 
-    /* 5. Moore Neighborhood Tracing */
+    /* 5. Moore Neighborhood Tracing. */
     {
         int m_dx[8] = { 0, 1, 1, 1, 0, -1, -1, -1 };
         int m_dy[8] = { -1, -1, 0, 1, 1, 1, 0, -1 };
@@ -492,7 +492,7 @@ static IPObjectStruct *HWCBuildProjectUnionLocal(IPObjectStruct *Solid,
 
         int cx = startX,
             cy = startY;
-        int dir = 2; /* Pretend we moved East (2), so left is North (0) */
+        int dir = 2; /* Pretend we moved East (2), so left is North (0). */
         int first_step = 1;
 
         do {
@@ -509,7 +509,7 @@ static IPObjectStruct *HWCBuildProjectUnionLocal(IPObjectStruct *Solid,
 
             for (i = 0; i < 8; ++i) {
                 int nx, ny;
-                /* Turn 135 deg left to ensure we trace outside boundary */
+                /* Turn 135 deg left to ensure we trace outside boundary. */
                 next_dir = (dir + 5 + i) % 8; 
                 nx = cx + m_dx[next_dir];
                 ny = cy + m_dy[next_dir];
@@ -525,7 +525,7 @@ static IPObjectStruct *HWCBuildProjectUnionLocal(IPObjectStruct *Solid,
                 }
             }
 
-            if (!found) break; /* Isolated pixel */
+            if (!found) break; /* Isolated pixel. */
 
             if (!first_step && cx == startX && cy == startY) {
                 break;
@@ -541,7 +541,7 @@ static IPObjectStruct *HWCBuildProjectUnionLocal(IPObjectStruct *Solid,
             return NULL;
         }
 
-        /* 6. Convert traced pixel path back to view-local XY */
+        /* 6. Convert traced pixel path back to view-local XY. */
         {
             IPPolygonStruct *NewPl = IritPrsrAllocPolygon(0, NULL, NULL);
             IPVertexStruct *FirstV = NULL,
@@ -716,7 +716,7 @@ static IPObjectStruct *HWCIritPrsrApproxBSplineContourFromSolidView(IPObjectStru
         cur = cur -> Pnext;
     }
 
-    /* Laplacian smoothing to remove pixel stair-stepping artifacts */
+    /* Laplacian smoothing to remove pixel stair-stepping artifacts. */
     for (it = 0; it < smooth_iters; ++it) {
         for (i = 0; i < npts; ++i) {
             int im1 = (i - 1 + npts) % npts;
@@ -728,7 +728,7 @@ static IPObjectStruct *HWCIritPrsrApproxBSplineContourFromSolidView(IPObjectStru
         memcpy(pts, tmp_pts, sizeof(IrtPtType) * npts);
     }
 
-    /* Subsample points */
+    /* Subsample points. */
     step = npts / NumCtrl;
     if (step < 1) step = 1;
 
@@ -1275,7 +1275,7 @@ static IPObjectStruct *HWCBuildSilhouetteRuledSrf(const IPObjectStruct *Contour,
         return NULL;
     }
 
-    /* 7. Robust Bottom Line Removal based on exact distance to missing edges
+    /* 7. Robust Bottom Line Removal based on exact distance to missing edges. 
      *    We project the 3D boundary edges to 2D line segments.
      *    Then we measure the distance from every point on the contour to these segments.
      *    Points very close to ANY boundary segment are identified as part 
@@ -1312,7 +1312,7 @@ static IPObjectStruct *HWCBuildSilhouetteRuledSrf(const IPObjectStruct *Contour,
         }
         IritFree(boundary_edges);
 
-        /* Find the longest contiguous sequence of is_boundary == 0 (wrapping around) */
+        /* Find the longest contiguous sequence of is_boundary == 0 (wrapping around). */
         int best_start = 0;
         int best_len = 0;
 
@@ -1328,8 +1328,8 @@ static IPObjectStruct *HWCBuildSilhouetteRuledSrf(const IPObjectStruct *Contour,
                     best_len = len;
                     best_start = k;
                 }
-                /* Fast forward k to the end of this non-boundary sequence */
-                /* But only up to n-1 to avoid infinite loops if the whole thing wraps */
+                /* Fast forward k to the end of this non-boundary sequence. */
+                /* But only up to n-1 to avoid infinite loops if the whole thing wraps. */
                 k += len - 1;
             }
         }
@@ -1342,7 +1342,7 @@ static IPObjectStruct *HWCBuildSilhouetteRuledSrf(const IPObjectStruct *Contour,
         }
     }
     else {
-        /* Fallback if no boundary edges found: remove bottom 10% */
+        /* Fallback if no boundary edges found: remove bottom 10%. */
         IrtRType bottom_thresh = miny + (maxy - miny) * 0.10;
         int left_idx = -1;
         int right_idx = -1;
@@ -1365,7 +1365,7 @@ static IPObjectStruct *HWCBuildSilhouetteRuledSrf(const IPObjectStruct *Contour,
         if (left_idx != -1 && right_idx != -1 && left_idx != right_idx &&
             (max_x_bottom - min_x_bottom) > (maxx - minx) * 0.10) {
 
-            /* Path 1: left_idx to right_idx (incrementing) */
+            /* Path 1: left_idx to right_idx (incrementing). */
             IrtRType max_y_path1 = miny;
             int len1 = (right_idx - left_idx + n) % n;
             for (k = 0; k <= len1; ++k) {
@@ -1373,7 +1373,7 @@ static IPObjectStruct *HWCBuildSilhouetteRuledSrf(const IPObjectStruct *Contour,
                 if (pts2d[idx][1] > max_y_path1) max_y_path1 = pts2d[idx][1];
             }
 
-            /* Path 2: right_idx to left_idx (incrementing) */
+            /* Path 2: right_idx to left_idx (incrementing). */
             IrtRType max_y_path2 = miny;
             int len2 = (left_idx - right_idx + n) % n;
             for (k = 0; k <= len2; ++k) {
@@ -1392,7 +1392,7 @@ static IPObjectStruct *HWCBuildSilhouetteRuledSrf(const IPObjectStruct *Contour,
         }
     }
 
-    /* Extract the top path */
+    /* Extract the top path. */
     IrtPtType *top_pts = (IrtPtType *) IritMalloc(sizeof(IrtPtType) * top_len);
     for (k = 0; k < top_len; ++k) {
         IRIT_PT_COPY(top_pts[k], pts2d[(top_start + k) % n]);
@@ -1528,7 +1528,7 @@ static void HWCCombineGCodeFiles(const char *const* GcodeFiles,
                     lastB = bOffset + b;
                     if (z < min_z_seen) min_z_seen = z;
 
-                    /* Override any safe Z exits to provide massive clearance for taller foam blocks */
+                    /* Override any safe Z exits to provide massive clearance for taller foam blocks. */
                     if (Params != NULL && z >= Params->FoamHeight) {
                         z = Params->FoamHeight + ExtraSafeZClearance;
                     }
@@ -1554,24 +1554,24 @@ static void HWCCombineGCodeFiles(const char *const* GcodeFiles,
 
     if (Params != NULL) {
         fprintf(fout, "\n; === Slice off base ===\n");
-        /* Move safely above the foam */
+        /* Move safely above the foam. */
         z = Params->FoamHeight + ExtraSafeZClearance;
         a = Params->FoamHeight + ExtraSafeZClearance;
         fprintf(fout, "G1 X%.3f Y%.3f Z%.3f A%.3f B%.3f F300\n", x, y, z, a, lastB);
-        /* Move to the starting side of the machine (safely clear of foam) */
+        /* Move to the starting side of the machine (safely clear of foam). */
         x = 20.0;
         y = 20.0;
         fprintf(fout, "G1 X%.3f Y%.3f Z%.3f A%.3f B%.3f F300\n", x, y, z, a, lastB);
-        /* Drop down to the slice height (1mm below the lowest point of the object) */
+        /* Drop down to the slice height (1mm below the lowest point of the object). */
         z = min_z_seen - 1.0;
         if (z < Params->MinimalHeight) z = Params->MinimalHeight;
         a = z;
         fprintf(fout, "G1 X%.3f Y%.3f Z%.3f A%.3f B%.3f F150\n", x, y, z, a, lastB);
-        /* Slice entirely through the foam to the other side */
+        /* Slice entirely through the foam to the other side. */
         x = 450.0;
         y = 450.0;
         fprintf(fout, "G1 X%.3f Y%.3f Z%.3f A%.3f B%.3f F150\n", x, y, z, a, lastB);
-        /* Pull back up to safe height */
+        /* Pull back up to safe height. */
         z = Params->FoamHeight + ExtraSafeZClearance;
         a = Params->FoamHeight + ExtraSafeZClearance;
         fprintf(fout, "G1 X%.3f Y%.3f Z%.3f A%.3f B%.3f F300\n", x, y, z, a, lastB);
@@ -1579,10 +1579,10 @@ static void HWCCombineGCodeFiles(const char *const* GcodeFiles,
 
     fprintf(fout, "\n; === Return Home Synchronously ===\n");
     if (Params != NULL) {
-        /* Move XY and B to 0 while maintaining the high Z clearance to avoid collisions */
+        /* Move XY and B to 0 while maintaining the high Z clearance to avoid collisions. */
         fprintf(fout, "G1 X0.000 Y0.000 Z%.3f A%.3f B0.000 F300\n", z, a);
     }
-    /* Finally drop Z back to 0 synchronously to avoid snapping the wire */
+    /* Finally drop Z back to 0 synchronously to avoid snapping the wire. */
     fprintf(fout, "G1 X0.000 Y0.000 Z0.000 A0.000 B0.000 F300\n");
     
     /* Emit G28 only to ensure firmware resets coordinate systems if necessary, 
@@ -1816,7 +1816,7 @@ int HWCGenerateGCodeFromObj(IPObjectStruct *RawModel,
             printf("View %d: GCode written to %s\n", vi, gcodeFile);
             #endif /* DEBUG */
 
-            /* Append to AllSimObjs to combine all paths */
+            /* Append to AllSimObjs to combine all paths. */
             IritPrsrListObjectAppend(AllSimObjs, SimObj);
             SimObj = NULL;
 
@@ -1845,7 +1845,7 @@ int HWCGenerateGCodeFromObj(IPObjectStruct *RawModel,
         result = 0;
     }
 
-    /* Save all combined paths to a single ITD file */
+    /* Save all combined paths to a single ITD file. */
     if (AllSimObjs != NULL) {
         if (OutputITDType > 0) {
             if (OutputITDType == 2) {
