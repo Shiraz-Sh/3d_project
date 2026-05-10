@@ -108,7 +108,8 @@ int HWCGenerateGCodeFromObj(IPObjectStruct *RawModel,
                             const char *OutputGCodePath,
                             int NumViews,
                             int OutputITDType,
-                            double ITDLength);
+                            double ITDLength,
+                            const char *fileName);
 
 /*****************************************************************************
 * AUXILIARY:                                                                 *
