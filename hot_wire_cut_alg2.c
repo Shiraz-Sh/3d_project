@@ -56,6 +56,11 @@
 #include "prsr_loc.h"
 #define HWCSIL_GRID_RES 1024
 
+typedef struct IritPrsrHWCEdgeStruct {
+    IrtPtType Pt1;
+    IrtPtType Pt2;
+} IritPrsrHWCEdgeStruct;
+
 static int HWCIritPrsrBuildViewBasisFromMat(const IrtHmgnMatType Mat,
                                             IrtVecType u,
                                             IrtVecType v,
@@ -956,11 +961,6 @@ static IrtHmgnMatType *HWCSelectBestViewSampling(IPObjectStruct *PObj,
     return ViewMats;
 }
 
-typedef struct IritPrsrHWCEdgeStruct {
-    IrtPtType Pt1;
-    IrtPtType Pt2;
-} IritPrsrHWCEdgeStruct;
-
 /*****************************************************************************
 * AUXILIARY:								                                 *
 * Auxiliary function to find missing boundary edges in an open solid.	     *
@@ -1003,7 +1003,7 @@ static IritPrsrHWCEdgeStruct *HWCFindBoundaryEdges(const IPObjectStruct *Solid,
         return NULL;
 
     AllEdges = (IritPrsrHWCEdgeStruct *) 
-        `           IritMalloc(sizeof(IritPrsrHWCEdgeStruct) * MaxEdges);
+                   IritMalloc(sizeof(IritPrsrHWCEdgeStruct) * MaxEdges);
     EdgeCounts = (int *) IritMalloc(sizeof(int) * MaxEdges);
 
     /* Collect all edges. */
