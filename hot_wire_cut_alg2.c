@@ -1538,13 +1538,20 @@ static void HWCCombineGCodeFiles(const char *const* GcodeFiles,
 {
 #define IRIT_MAX_LINE_LEN 512
     FILE *fout, *fin;
-    int fi;
-    double bOffset = 0.0, lastB = 0.0;
+    int fi,
+        f = 300,
+        safe_entry_lines_to_modify = 0;
+    double 
+        bOffset = 0.0, 
+        lastB = 0.0,
+        x = 0.0, 
+        y = 0.0, 
+        z = 0.0, 
+        a = 0.0, 
+        b = 0.0,
+        min_z_seen = 99999.0,
+        ExtraSafeZClearance = 150.0;
     char line[IRIT_MAX_LINE_LEN];
-    double x = 0.0, y = 0.0, z = 0.0, a = 0.0, b = 0.0;
-    double min_z_seen = 99999.0;
-    double ExtraSafeZClearance = 150.0;
-    int f = 300;
 
     fout = fopen(OutPath, "w");
     if (fout == NULL) {
@@ -1569,6 +1576,14 @@ static void HWCCombineGCodeFiles(const char *const* GcodeFiles,
         #endif /* DEBUG */
 
         while (fgets(line, sizeof(line), fin) != NULL) {
+            if (strncmp(line, ";Performing safe entry movement", 31) == 0) {
+                safe_entry_lines_to_modify = 2;
+            }
+            
+            if (strncmp(line, "; Performing vertical safe lift to safe Z height.", 49) == 0) {
+                safe_entry_lines_to_modify = 1;
+            }
+            
             if (strncmp(line, "G1 ", 3) == 0 &&
                 strstr(line, "B") != NULL &&
                 strstr(line, "X") != NULL) {
@@ -1583,6 +1598,10 @@ static void HWCCombineGCodeFiles(const char *const* GcodeFiles,
                     }
                     if (Params != NULL && a >= Params->FoamHeight) {
                         a = Params->FoamHeight + ExtraSafeZClearance;
+                    }
+                    if (safe_entry_lines_to_modify > 0) {
+                        f = 350;
+                        safe_entry_lines_to_modify--;
                     }
 
                     fprintf(fout,
