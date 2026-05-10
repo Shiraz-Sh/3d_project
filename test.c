@@ -43,7 +43,7 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    result = IritPrsrHWCGenerateGCodeFromObj(RawModel, outputFile, NumViews, 1, 0.0);
+    result = IritPrsrHWCGenerateGCodeFromObj(RawModel, outputFile, NumViews, 1, 0.0, "all_views_paths.itd");
 
     if (result) {
         printf("\n========================================\n");

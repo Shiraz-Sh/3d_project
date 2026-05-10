@@ -1678,6 +1678,7 @@ static void HWCConvertPolylinesToPolygons(IPObjectStruct *PObj) {
 * NumViews:         Number of view directions to generate.                   M
 * OutputITDType:    0 to skip ITD, 1 for polylines, 2 for polygons.          M
 * ITDLength:        Wire path visualization length (0.0 for default).        M
+* fileName:         Name of the output file.                                 M
 *                                                                            *
 * RETURN VALUE:                                                              M
 *   int: 1 on success, 0 on failure.                                         M
@@ -1692,7 +1693,8 @@ int HWCGenerateGCodeFromObj(IPObjectStruct *RawModel,
                             const char *OutputGCodePath,
                             int NumViews,
                             int OutputITDType,
-                            double ITDLength)
+                            double ITDLength, 
+                            const char* fileName)
 {
     IPObjectStruct *Contour, *RuledSrf, *SimObj, *AllSimObjs,
                    *Solid = NULL;
@@ -1899,9 +1901,9 @@ int HWCGenerateGCodeFromObj(IPObjectStruct *RawModel,
             if (OutputITDType == 2) {
                 HWCConvertPolylinesToPolygons(AllSimObjs);
             }
-            IritPrsrPutObjectToFile3("all_views_paths.itd", AllSimObjs, 0);
+            IritPrsrPutObjectToFile3(fileName, AllSimObjs, 0);
             #ifdef DEBUG
-            printf("All path geometries written to all_views_paths.itd\n");
+            printf("All path geometries written to %s\n", fileName);
             #endif /* DEBUG */
         }
 
