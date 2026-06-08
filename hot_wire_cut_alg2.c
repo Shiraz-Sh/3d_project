@@ -1766,6 +1766,10 @@ static void HWCCombineGCodeFiles(const char* const* GcodeFiles,
                     continue;
                 }
             }
+            /* Skip per-view Go Home commands; the combined file
+               emits its own G28 at the very end. */
+            if (strncmp(line, "G28", 3) == 0)
+                continue;
             fputs(line, fout);
         }
 
