@@ -55,6 +55,7 @@
 
 #include "prsr_loc.h"
 #define HWCSIL_GRID_RES 1024
+//#define DEBUG_HOT_WIRE_CUT_ALG2
 
 typedef struct IritPrsrHWCEdgeStruct {
     IrtPtType Pt1;
@@ -72,31 +73,32 @@ static void HWCGenLookAtMatrix(IrtVecType Eye,
                                IrtVecType Up,
                                IrtHmgnMatType Mat);
 
-static IrtRType HWCCalcPolygonArea(IPObjectStruct *PObj);
+static IrtRType HWCCalcPolygonArea(IritPrsrObjectStruct *PObj);
 
-static IPObjectStruct *HWCBuildProjectUnionLocal(IPObjectStruct *Solid,
+static IritPrsrObjectStruct *HWCBuildProjectUnionLocal(
+                                                 IritPrsrObjectStruct *Solid,
                                                  const IrtHmgnMatType MatLocal);
 
-static IPObjectStruct *HWCIritPrsrApproxBSplineContourFromSolidView(
-    IPObjectStruct *Solid,
+static IritPrsrObjectStruct *HWCIritPrsrApproxBSplineContourFromSolidView(
+    IritPrsrObjectStruct *Solid,
     const IrtHmgnMatType ViewMat,
     int NumCtrl);
 
-static IrtHmgnMatType *HWCSelectBestViewSampling(IPObjectStruct *PObj,
+static IrtHmgnMatType *HWCSelectBestViewSampling(IritPrsrObjectStruct *PObj,
                                                  int NumSamples,
                                                  IrtHmgnMatType *ResultMat);
 
 static IrtHmgnMatType *HWCSelectViewsSampling(int NumSamples);
 
-static IritPrsrHWCEdgeStruct *HWCFindBoundaryEdges(const IPObjectStruct *Solid,
+static IritPrsrHWCEdgeStruct *HWCFindBoundaryEdges(const IritPrsrObjectStruct *Solid,
                                                    int *OutNumEdges);
 
 static IrtRType HWCDistPointSegment2D(IrtPtType P,
                                       IrtPtType A,
                                       IrtPtType B);
 
-static IPObjectStruct *HWCBuildSilhouetteRuledSrf(const IPObjectStruct *Contour,
-                                                  const IPObjectStruct *Solid,
+static IritPrsrObjectStruct *HWCBuildSilhouetteRuledSrf(const IritPrsrObjectStruct *Contour,
+                                                  const IritPrsrObjectStruct *Solid,
                                                   const IrtHmgnMatType ViewMat,
                                                   const IritPrsrHWCDataStruct *Params);
 
@@ -105,13 +107,13 @@ static void HWCCombineGCodeFiles(const char const **GcodeFiles,
                                  const char *OutPath,
                                  const IritPrsrHWCDataStruct *Params);
 
-static void HWCConvertPolylinesToPolygons(IPObjectStruct *PObj);
+static void HWCConvertPolylinesToPolygons(IritPrsrObjectStruct *PObj);
 
-IrtRType HWCGenerateGCodeFromObj(IPObjectStruct *RawModel,
+IrtRType HWCGenerateGCodeFromObj(IritPrsrObjectStruct *RawModel,
                                  const char *OutputGCodePath,
                                  IrtRType NumViews,
                                  IrtRType OutputITDType,
-                                 IrtRType ITDLength,
+                                 IrtRType RulingExtent,
                                  const char *fileName,
                                  int uniformCut);
 
@@ -271,13 +273,13 @@ static void HWCGenLookAtMatrix(IrtVecType Eye,
 * RETURN VALUE:                                                              *
 * IrtRType: Estimated polygon area.                                          *
 *****************************************************************************/
-static IrtRType HWCCalcPolygonArea(IPObjectStruct *PObj)
+static IrtRType HWCCalcPolygonArea(IritPrsrObjectStruct *PObj)
 {
     IrtRType
         area = 0.0;
-    IPPolygonStruct *Pl;
+    IritPrsrPolygonStruct *Pl;
 
-    if (PObj == NULL || !IP_IS_POLY_OBJ(PObj))
+    if (PObj == NULL || !IRIT_PRSR_IS_POLY_OBJ(PObj))
         return 0.0;
 
     for (Pl = PObj -> U.Pl; Pl != NULL; Pl = Pl -> Pnext) {
@@ -300,15 +302,15 @@ static IrtRType HWCCalcPolygonArea(IPObjectStruct *PObj)
 * Returns contour as a high-resolution 2D polygon in view-local XY plane.    *
 *                                                                            *
 * PARAMETERS:                                                                *
-* Solid: IPObjectStruct pointer to valid polygonal object (must pass         *
-*        IP_IS_POLY_OBJ check). Multiple loops allowed. Input not            *
+* Solid: IritPrsrObjectStruct pointer to valid polygonal object (must pass         *
+*        IRIT_PRSR_IS_POLY_OBJ check). Multiple loops allowed. Input not            *
 *        modified. NULL returns NULL.                                        *
 * MatLocal: 4x4 transformation matrix mapping world coordinates to           *
 *           view-local frame. Typically built from orthonormal basis         *
 *           (u=right, v=up, w=forward). Singular matrices return NULL.       *
 *                                                                            *
 * RETURN VALUE:                                                              *
-* IPObjectStruct *: LIST object containing single POLY with boundary contour *
+* IritPrsrObjectStruct *: LIST object containing single POLY with boundary contour *
 *                   in view-local XY coordinates (Z=0), or NULL on failure   *
 *                   (NULL input, degenerate projection, allocation failure,  *
 *                   or empty boundary). Caller owns returned object and must *
@@ -340,7 +342,7 @@ static IrtRType HWCCalcPolygonArea(IPObjectStruct *PObj)
 * HWCIritPrsrApproxBSplineContourFromSolidView (higher-level wrapper),       *
 * HWCIritPrsrBuildViewBasisFromMat (constructs MatLocal).                    *
 *****************************************************************************/
-static IPObjectStruct *HWCBuildProjectUnionLocal(IPObjectStruct *Solid,
+static IritPrsrObjectStruct *HWCBuildProjectUnionLocal(IritPrsrObjectStruct *Solid,
     const IrtHmgnMatType MatLocal)
 {
     IrtRType
@@ -353,14 +355,14 @@ static IPObjectStruct *HWCBuildProjectUnionLocal(IPObjectStruct *Solid,
     int *px, *py, *ints, x, y, i, j,
         startX = -1,
         startY = -1;
-    IPPolygonStruct *Pl;
+    IritPrsrPolygonStruct *Pl;
 
-    if (Solid == NULL || !IP_IS_POLY_OBJ(Solid))
+    if (Solid == NULL || !IRIT_PRSR_IS_POLY_OBJ(Solid))
         return NULL;
 
     /* 1. Project points to local XY, collect them to compute bounding box. */
-    for (Pl = Solid->U.Pl; Pl != NULL; Pl = Pl->Pnext) {
-        IPVertexStruct *cur,
+    for (Pl = Solid -> U.Pl; Pl != NULL; Pl = Pl -> Pnext) {
+        IritPrsrVertexStruct *cur,
             * V = Pl->PVertex;
         int guard = 0;
 
@@ -403,7 +405,7 @@ static IPObjectStruct *HWCBuildProjectUnionLocal(IPObjectStruct *Solid,
     dy = maxy - miny;
 
     /* 2. Allocate and clear 2D grid. */
-    grid = (unsigned char*) IritMalloc(HWCSIL_GRID_RES * HWCSIL_GRID_RES);
+    grid = (unsigned char *) IritMalloc(HWCSIL_GRID_RES * HWCSIL_GRID_RES);
     memset(grid, 0, HWCSIL_GRID_RES * HWCSIL_GRID_RES);
 
     /* Assume max polygon vertex count <= 4096. */
@@ -413,8 +415,8 @@ static IPObjectStruct *HWCBuildProjectUnionLocal(IPObjectStruct *Solid,
 
     /* 3. Scanline fill each projected polygon. */
     for (Pl = Solid -> U.Pl; Pl != NULL; Pl = Pl -> Pnext) {
-        IPVertexStruct *cur,
-            * V = Pl -> PVertex;
+        IritPrsrVertexStruct *cur,
+            *V = Pl -> PVertex;
         int pminy, pmaxy,
             npts = 0,
             guard = 0;
@@ -429,8 +431,8 @@ static IPObjectStruct *HWCBuildProjectUnionLocal(IPObjectStruct *Solid,
 
             IritMiscMatMultPtby4by4(localP, cur -> Coord, MatLocal);
 
-            px_val = (int)((localP[0] - minx) / dx * (HWCSIL_GRID_RES - 1));
-            py_val = (int)((localP[1] - miny) / dy * (HWCSIL_GRID_RES - 1));
+            px_val = (int) ((localP[0] - minx) / dx * (HWCSIL_GRID_RES - 1));
+            py_val = (int) ((localP[1] - miny) / dy * (HWCSIL_GRID_RES - 1));
             if (px_val < 0)
                 px_val = 0;
             if (px_val >= HWCSIL_GRID_RES)
@@ -562,7 +564,8 @@ static IPObjectStruct *HWCBuildProjectUnionLocal(IPObjectStruct *Solid,
             else break;
 
             for (i = 0; i < 8; ++i) {
-                int nx, ny;
+                int nx, ny; 
+
                 /* Turn 135 deg left to ensure we trace outside boundary. */
                 next_dir = (dir + 5 + i) % 8;
                 nx = cx + m_dx[next_dir];
@@ -597,20 +600,27 @@ static IPObjectStruct *HWCBuildProjectUnionLocal(IPObjectStruct *Solid,
 
         /* 6. Convert traced pixel path back to view-local XY. */
         {
-            IPPolygonStruct *NewPl = IritPrsrAllocPolygon(0, NULL, NULL);
-            IPVertexStruct *FirstV = NULL,
+            IritPrsrPolygonStruct
+                *NewPl = IritPrsrAllocPolygon(0, NULL, NULL);
+            IritPrsrVertexStruct
+                *FirstV = NULL,
                 *PrevV = NULL;
             int i_path;
-            IPObjectStruct *PolyObj,
+            IritPrsrObjectStruct *PolyObj,
                 *OutList;
 
             for (i_path = 0; i_path < path_len; ++i_path) {
-                IPVertexStruct *NV = IritPrsrAllocVertex2(NULL);
+                IritPrsrVertexStruct
+                    *NV = IritPrsrAllocVertex2(NULL);
+
                 NV -> Coord[0] = minx + pathX[i_path] * dx / (HWCSIL_GRID_RES - 1);
                 NV -> Coord[1] = miny + pathY[i_path] * dy / (HWCSIL_GRID_RES - 1);
                 NV -> Coord[2] = 0.0;
-                if (FirstV == NULL) FirstV = PrevV = NV;
-                else { PrevV -> Pnext = NV; PrevV = NV; }
+                if (FirstV == NULL)
+                    FirstV = PrevV = NV;
+                else {
+                    PrevV -> Pnext = NV; PrevV = NV;
+                }
             }
             IritFree(pathX);
             IritFree(pathY);
@@ -630,7 +640,7 @@ static IPObjectStruct *HWCBuildProjectUnionLocal(IPObjectStruct *Solid,
                 IritPrsrFreePolygonList(NewPl);
                 return NULL;
             }
-            IP_SET_POLYGON_OBJ(PolyObj);
+            IRIT_PRSR_SET_POLYGON_OBJ(PolyObj);
             PolyObj -> Pnext = NULL;
 
             OutList = IritPrsrGenLISTObject(NULL);
@@ -664,8 +674,8 @@ static IPObjectStruct *HWCBuildProjectUnionLocal(IPObjectStruct *Solid,
 * 7: Returns closed polygon in world frame, ready for further processing.    *
 *                                                                            *
 * PARAMETERS:                                                                *
-* Solid: IPObjectStruct pointer to valid polygonal object (checked           *
-*        via IP_IS_POLY_OBJ). Multiple polygons/loops allowed.               *
+* Solid: IritPrsrObjectStruct pointer to valid polygonal object (checked           *
+*        via IRIT_PRSR_IS_POLY_OBJ). Multiple polygons/loops allowed.               *
 *        Input not modified. NULL or non-polygon returns NULL.               *
 * ViewMat: 4x4 homogeneous view matrix. Row 2 (Mat[2][0..2])                 *
 *          interpreted as forward direction vector (normalized               *
@@ -675,7 +685,7 @@ static IPObjectStruct *HWCBuildProjectUnionLocal(IPObjectStruct *Solid,
 *          calculation. Larger values preserve detail; typical 32-128.       *
 *                                                                            *
 * RETURN VALUE:                                                              *
-* IPObjectStruct *: Newly allocated POLY object in world coordinates with    *
+* IritPrsrObjectStruct *: Newly allocated POLY object in world coordinates with    *
 *                   closed contour polygon, or NULL on failure (NULL input,  *
 *                   invalid matrix, degenerate projection, allocation        *
 *                   failure or insufficient boundary points). Caller owns    *
@@ -694,16 +704,16 @@ static IPObjectStruct *HWCBuildProjectUnionLocal(IPObjectStruct *Solid,
 * HWCBuildSilhouetteRuledSrf (contour to ruled surface),                     *
 * HWCSelectBestViewSampling (multi-view contour scoring).                    *
 *****************************************************************************/
-static IPObjectStruct *HWCIritPrsrApproxBSplineContourFromSolidView(
-                                                 IPObjectStruct *Solid,
+static IritPrsrObjectStruct *HWCIritPrsrApproxBSplineContourFromSolidView(
+                                                 IritPrsrObjectStruct *Solid,
                                                  const IrtHmgnMatType ViewMat,
                                                  int NumCtrl)
 {
     IrtVecType u, v, w;
     IrtHmgnMatType MatLocal, InvMat;
-    IPObjectStruct *UnionLocal, *Poly, *FinalObj;
-    IPPolygonStruct *Pl, *FinalPl;
-    IPVertexStruct *V, *cur,
+    IritPrsrObjectStruct *UnionLocal, *Poly, *FinalObj;
+    IritPrsrPolygonStruct *Pl, *FinalPl;
+    IritPrsrVertexStruct *V, *cur,
         *FirstV = NULL,
         *PrevV = NULL;
     IrtPtType *pts,
@@ -712,7 +722,7 @@ static IPObjectStruct *HWCIritPrsrApproxBSplineContourFromSolidView(
         npts = 0,
         smooth_iters = 5;
 
-    if (Solid == NULL || !IP_IS_POLY_OBJ(Solid))
+    if (Solid == NULL || !IRIT_PRSR_IS_POLY_OBJ(Solid))
         return NULL;
 
     if (!HWCIritPrsrBuildViewBasisFromMat(ViewMat, u, v, w, 1))
@@ -742,7 +752,7 @@ static IPObjectStruct *HWCIritPrsrApproxBSplineContourFromSolidView(
        Extract it, smooth it lightly to remove pixel steps,
        and return in world coords. */
     Poly = IritPrsrListObjectGet(UnionLocal, 0);
-    if (Poly == NULL || !IP_IS_POLY_OBJ(Poly) || Poly -> U.Pl == NULL) {
+    if (Poly == NULL || !IRIT_PRSR_IS_POLY_OBJ(Poly) || Poly -> U.Pl == NULL) {
         IritPrsrFreeObject(UnionLocal);
         return NULL;
     }
@@ -755,8 +765,8 @@ static IPObjectStruct *HWCIritPrsrApproxBSplineContourFromSolidView(
         cur = cur -> Pnext;
     } while (cur != NULL && cur != V);
 
-    pts = (IrtPtType*) IritMalloc(sizeof(IrtPtType) * npts);
-    tmp_pts = (IrtPtType*) IritMalloc(sizeof(IrtPtType) * npts);
+    pts = (IrtPtType *) IritMalloc(sizeof(IrtPtType) * npts);
+    tmp_pts = (IrtPtType *) IritMalloc(sizeof(IrtPtType) * npts);
 
     cur = V;
     for (i = 0; i < npts; ++i) {
@@ -771,6 +781,7 @@ static IPObjectStruct *HWCIritPrsrApproxBSplineContourFromSolidView(
         for (i = 0; i < npts; ++i) {
             int im1 = (i - 1 + npts) % npts,
                 ip1 = (i + 1) % npts;
+
             tmp_pts[i][0] = (pts[im1][0] + pts[ip1][0] + pts[i][0]) / 3.0;
             tmp_pts[i][1] = (pts[im1][1] + pts[ip1][1] + pts[i][1]) / 3.0;
             tmp_pts[i][2] = 0.0;
@@ -786,7 +797,8 @@ static IPObjectStruct *HWCIritPrsrApproxBSplineContourFromSolidView(
 
     for (i = 0; i < npts; i += step) {
         IrtPtType worldP;
-        IPVertexStruct *NV;
+        IritPrsrVertexStruct *NV;
+
         IritMiscMatMultPtby4by4(worldP, pts[i], MatLocal);
         NV = IritPrsrAllocVertex2(NULL);
         NV -> Coord[0] = worldP[0];
@@ -814,7 +826,7 @@ static IPObjectStruct *HWCIritPrsrApproxBSplineContourFromSolidView(
 
     FinalObj = IritPrsrGenPOLYObject(FinalPl);
     if (FinalObj != NULL) 
-        IP_SET_POLYGON_OBJ(FinalObj);
+        IRIT_PRSR_SET_POLYGON_OBJ(FinalObj);
     else 
         IritPrsrFreePolygonList(FinalPl);
 
@@ -841,8 +853,8 @@ static IPObjectStruct *HWCIritPrsrApproxBSplineContourFromSolidView(
 * performed.                                                                 *
 *                                                                            *
 * PARAMETERS:                                                                *
-* PObj: IPObjectStruct pointer to a polygonal object. Must satisfy           *
-*       IP_IS_POLY_OBJ. The object is not modified. NULL returns NULL.       *
+* PObj: IritPrsrObjectStruct pointer to a polygonal object. Must satisfy           *
+*       IRIT_PRSR_IS_POLY_OBJ. The object is not modified. NULL returns NULL.       *
 * NumSamples: Number of desired output samples (positive integer).           *
 *             Internally doubled (2*NumSamples) to improve sampling density  *
 *             and robustness of scoring.                                     *
@@ -862,7 +874,7 @@ static IPObjectStruct *HWCIritPrsrApproxBSplineContourFromSolidView(
 * HWCIritPrsrApproxBSplineContourFromSolidView, HWCGenLookAtMatrix,          *
 * HWCCalcPolygonArea.                                                        *
 *****************************************************************************/
-static IrtHmgnMatType *HWCSelectBestViewSampling(IPObjectStruct *PObj,
+static IrtHmgnMatType *HWCSelectBestViewSampling(IritPrsrObjectStruct *PObj,
                                                  int NumSamples,
                                                  IrtHmgnMatType *ResultMat)
 {
@@ -884,7 +896,8 @@ static IrtHmgnMatType *HWCSelectBestViewSampling(IPObjectStruct *PObj,
 
     /* Generate candidate view matrices (Uniform circle in XY plane). */
     for (s = 0; s < NumSamples; ++s) {
-        IrtRType theta = 2.0 * 3.14159265358979323846 * s / NumSamples;
+        IrtRType
+            theta = 2.0 * 3.14159265358979323846 * s / NumSamples;
         IrtRType r = 2.0;
         IrtVecType CamPos, Center, Up;
 
@@ -910,7 +923,7 @@ static IrtHmgnMatType *HWCSelectBestViewSampling(IPObjectStruct *PObj,
     }
 
     for (i = 0; i < NumSamples; ++i) {
-        IPObjectStruct *Contour;
+        IritPrsrObjectStruct *Contour;
         IrtRType wxy_len;
 
         scores[i] = 0.0;
@@ -957,14 +970,16 @@ static IrtHmgnMatType *HWCSelectBestViewSampling(IPObjectStruct *PObj,
     {
         int RequestedViews = NumSamples / 2;
         int num_selected = 0;
-        IrtHmgnMatType *SelectedMats = (IrtHmgnMatType*)
-            IritMalloc(sizeof(IrtHmgnMatType) * NumSamples);
+        IrtHmgnMatType
+            *SelectedMats = (IrtHmgnMatType *)
+                               IritMalloc(sizeof(IrtHmgnMatType) * NumSamples);
         /* 0°=+X, 45°=diagonal, 90°=+Y, 135°=other diagonal */
         IrtRType fixed_angles[4] = { 0.0, 45.0, 90.0, 135.0 };
 
         for (i = 0; i < 4 && num_selected < RequestedViews; ++i) {
             IrtRType theta = fixed_angles[i] * 3.14159265358979323846 / 180.0;
             IrtVecType CamPos, Center, Up;
+
             CamPos[0] = cos(theta) * 2.0;
             CamPos[1] = sin(theta) * 2.0;
             CamPos[2] = 0.0;
@@ -1000,10 +1015,11 @@ static IrtHmgnMatType *HWCSelectBestViewSampling(IPObjectStruct *PObj,
         for (i = 0; i < NumSamples && num_selected < RequestedViews; ++i) {
             int is_exact = 0;
             for (j = 0; j < num_selected; ++j) {
-                IrtRType dot =
-                    ViewMats[i][2][0] * SelectedMats[j][2][0] +
-                    ViewMats[i][2][1] * SelectedMats[j][2][1] +
-                    ViewMats[i][2][2] * SelectedMats[j][2][2];
+                IrtRType 
+                    dot = ViewMats[i][2][0] * SelectedMats[j][2][0] +
+                          ViewMats[i][2][1] * SelectedMats[j][2][1] +
+                          ViewMats[i][2][2] * SelectedMats[j][2][2];
+
                 if (IRIT_FABS(dot) > 0.999) {
                     is_exact = 1;
                     break;
@@ -1088,7 +1104,7 @@ static IrtHmgnMatType *HWCSelectViewsSampling(int NumSamples)
 * AUXILIARY:								                                 *
 * Auxiliary function to find missing boundary edges in an open solid.	     *
 *****************************************************************************/
-static IritPrsrHWCEdgeStruct *HWCFindBoundaryEdges(const IPObjectStruct *Solid,
+static IritPrsrHWCEdgeStruct *HWCFindBoundaryEdges(const IritPrsrObjectStruct *Solid,
                                                    int *OutNumEdges)
 {
     int i, j, k, StackTop, CurrentLoopCount,
@@ -1101,15 +1117,15 @@ static IritPrsrHWCEdgeStruct *HWCFindBoundaryEdges(const IPObjectStruct *Solid,
         BestLoopAvgZ = IRIT_INFNTY,
         EPS = 1e-4;
     int *EdgeCounts, *Visited, *Stack, *CurrentLoopIndices;
-    IPPolygonStruct *Pl;
-    IPVertexStruct *V, *VNext;
+    IritPrsrPolygonStruct *Pl;
+    IritPrsrVertexStruct *V, *VNext;
     IritPrsrHWCEdgeStruct *AllEdges,
         *RawBoundaryEdges = NULL,
         *BestLoopEdges = NULL;
 
     if (OutNumEdges)
         *OutNumEdges = 0;
-    if (!Solid || !IP_IS_POLY_OBJ(Solid))
+    if (!Solid || !IRIT_PRSR_IS_POLY_OBJ(Solid))
         return NULL;
 
     /* Count total possible edges. */
@@ -1335,7 +1351,7 @@ static IrtRType HWCDistPointSegment2D(IrtPtType P,
 *                                  Z=local_v_scaled+FoamH/2                  *
 *      Y=-FoamDepth/2 (front face relative to foam center).                  *
 *   4. Extrude the curve along (0, FoamDepth, 0) to get S(u,v).              *
-*   5. Tag with IRIT_ATTR_ID_Dir = CAGD_CONST_U_DIR so IritPrsrHWCCreatePath *
+*   5. Tag with IRIT_ATTR_ID_Dir = IRIT_CAGD_CONST_U_DIR so IritPrsrHWCCreatePath *
 *      samples in V direction (silhouette), giving both clamps the full      *
 *      silhouette path in sync.                                              *
 *                                                                            *
@@ -1347,11 +1363,11 @@ static IrtRType HWCDistPointSegment2D(IrtPtType P,
 *   Params: HWC machine parameters; uses FoamWidth, FoamHeight, FoamDepth.   *
 *                                                                            *
 * RETRUN VALUE:                                                              *
-* IPObjectStruct*: Surface on success, NULL on failure.                      *
+* IritPrsrObjectStruct*: Surface on success, NULL on failure.                      *
 *         Caller owns the returned object and must free it.                  *
 *****************************************************************************/
-static IPObjectStruct *HWCBuildSilhouetteRuledSrf(const IPObjectStruct *Contour,
-                                                  const IPObjectStruct *Solid,
+static IritPrsrObjectStruct *HWCBuildSilhouetteRuledSrf(const IritPrsrObjectStruct *Contour,
+                                                  const IritPrsrObjectStruct *Solid,
                                                   const IrtHmgnMatType ViewMat,
                                                   const IritPrsrHWCDataStruct *Params)
 {
@@ -1360,18 +1376,18 @@ static IPObjectStruct *HWCBuildSilhouetteRuledSrf(const IPObjectStruct *Contour,
         best_len = 0,
         num_boundary_edges = 0,
         top_start = 0,
-        top_len = n;
+        top_len = 0;
     IrtRType minx, miny, maxx, maxy, scale_x, scale_z, scale, cx, cy;
     IrtVecType u_vec, v_vec, w_vec;
     IrtHmgnMatType MatLocal;
     IrtPtType *pts2d;
-    IPVertexStruct *V, *cur;
-    CagdCrvStruct *Crv;
-    CagdVecStruct YDir;
-    CagdSrfStruct *Srf;
-    IPObjectStruct *SrfObj;
+    IritPrsrVertexStruct *V, *cur;
+    IritCagdCrvStruct *Crv;
+    IritCagdVecStruct YDir;
+    IritCagdSrfStruct *Srf;
+    IritPrsrObjectStruct *SrfObj;
 
-    if (Contour == NULL || !IP_IS_POLY_OBJ((IPObjectStruct*) Contour) ||
+    if (Contour == NULL || !IRIT_PRSR_IS_POLY_OBJ((IritPrsrObjectStruct*) Contour) ||
         Contour -> U.Pl == NULL || Params == NULL)
         return NULL;
 
@@ -1413,6 +1429,8 @@ static IPObjectStruct *HWCBuildSilhouetteRuledSrf(const IPObjectStruct *Contour,
     } while (cur != NULL && cur != V);
 
     if (n < 3) return NULL;
+
+    top_len = n;
 
     /* 3. Project each vertex to view-local 2D, ignoring world Z.
      *   localP[0] = view-right component -> machine X
@@ -1596,7 +1614,7 @@ static IPObjectStruct *HWCBuildSilhouetteRuledSrf(const IPObjectStruct *Contour,
      *    The extruded surface must be aligned with w_vec in 3D.
      *    The start of the extrusion will be -w_vec * FoamDepth/2.
      *    We also shift the entire cut upwards to be centered in the foam block. */
-    Crv = IritCagdBspCrvNew(top_len, 2, CAGD_PT_E3_TYPE);
+    Crv = IritCagdBspCrvNew(top_len, 2, IRIT_CAGD_PT_E3_TYPE);
     if (Crv == NULL) {
         IritFree(pts2d);
         IritFree(top_pts);
@@ -1651,8 +1669,8 @@ static IPObjectStruct *HWCBuildSilhouetteRuledSrf(const IPObjectStruct *Contour,
     IritCagdCrvFree(Crv);
     if (Srf == NULL) return NULL;
 
-    /* 8. Wrap into IPObjectStruct and tag ruling direction as U.
-     *   With CAGD_CONST_U_DIR the HWC generator sets:
+    /* 8. Wrap into IritPrsrObjectStruct and tag ruling direction as U.
+     *   With IRIT_CAGD_CONST_U_DIR the HWC generator sets:
      *     RulingDirection   = U  (front-to-back)
      *     SamplingDirection = V  (along silhouette)
      *   => Crv1 = S(u,vMin) and Crv2 = S(u,vMax), so both clamps trace
@@ -1660,7 +1678,7 @@ static IPObjectStruct *HWCBuildSilhouetteRuledSrf(const IPObjectStruct *Contour,
     SrfObj = IritPrsrGenSrfObject("sil_ruled_srf", Srf, NULL);
     if (SrfObj != NULL) {
         IritMiscAttrIDSetObjectIntAttrib(SrfObj, IRIT_ATTR_ID_Dir,
-            CAGD_CONST_U_DIR);
+            IRIT_CAGD_CONST_U_DIR);
     }
     else {
         IritCagdSrfFree(Srf);
@@ -1701,9 +1719,9 @@ static void HWCCombineGCodeFiles(const char const **GcodeFiles,
         fprintf(stderr, "HWCCombineGCodeFiles: cannot open '%s'.\n", OutPath);
         return;
     }
-#ifdef DEBUG
+#ifdef DEBUG_HOT_WIRE_CUT_ALG2
     fprintf(fout, "; Combined GCode - %d views\n\n", NumFiles);
-#endif /* DEBUG */
+#endif /* DEBUG_HOT_WIRE_CUT_ALG2 */
 
     for (fi = 0; fi < NumFiles; ++fi) {
         lastB = bOffset;
@@ -1714,9 +1732,9 @@ static void HWCCombineGCodeFiles(const char const **GcodeFiles,
                 GcodeFiles[fi]);
             continue;
         }
-#ifdef DEBUG
+#ifdef DEBUG_HOT_WIRE_CUT_ALG2
         fprintf(fout, "; === View %d start ===\n", fi);
-#endif /* DEBUG */
+#endif /* DEBUG_HOT_WIRE_CUT_ALG2 */
 
         while (fgets(line, sizeof(line), fin) != NULL) {
             if (strncmp(line, ";Performing safe entry movement", 31) == 0) {
@@ -1775,9 +1793,9 @@ static void HWCCombineGCodeFiles(const char const **GcodeFiles,
 
         fclose(fin);
         bOffset = lastB;
-#ifdef DEBUG
+#ifdef DEBUG_HOT_WIRE_CUT_ALG2
         fprintf(fout, "; === View %d end ===\n\n", fi);
-#endif /* DEBUG */
+#endif /* DEBUG_HOT_WIRE_CUT_ALG2 */
     }
 
     if (Params != NULL) {
@@ -1818,9 +1836,9 @@ static void HWCCombineGCodeFiles(const char const **GcodeFiles,
        but since we are already at 0,0,0,0,0 it won't physically move sequentially. */
     fprintf(fout, "G28; Go Home\n");
     fclose(fout);
-#ifdef DEBUG
+#ifdef DEBUG_HOT_WIRE_CUT_ALG2
     printf("Combined GCode written to: %s\n", OutPath);
-#endif // DEBUG
+#endif // DEBUG_HOT_WIRE_CUT_ALG2
 #undef IRIT_MAX_LINE_LEN
 }
 
@@ -1830,20 +1848,20 @@ static void HWCCombineGCodeFiles(const char const **GcodeFiles,
 *   It traverses lists and converts matching polyline objects in-place.      *
 *                                                                            *
 * PARAMETERS:                                                                *
-*   PObj:       The IPObjectStruct to process (can be a list or polyline).   *
+*   PObj:       The IritPrsrObjectStruct to process (can be a list or polyline).   *
 *****************************************************************************/
-static void HWCConvertPolylinesToPolygons(IPObjectStruct *PObj) {
+static void HWCConvertPolylinesToPolygons(IritPrsrObjectStruct *PObj) {
     if (PObj == NULL) 
         return;
-    if (IP_IS_OLST_OBJ(PObj)) {
-        IPObjectStruct *PList;
+    if (IRIT_PRSR_IS_OLST_OBJ(PObj)) {
+        IritPrsrObjectStruct *PList; 
         int i = 0;
         while ((PList = IritPrsrListObjectGet(PObj, i++)) != NULL) {
             HWCConvertPolylinesToPolygons(PList);
         }
     }
-    else if (IP_IS_POLY_OBJ(PObj) && IP_IS_POLYLINE_OBJ(PObj)) 
-        IP_SET_POLYGON_OBJ(PObj);
+    else if (IRIT_PRSR_IS_POLY_OBJ(PObj) && IRIT_PRSR_IS_POLYLINE_OBJ(PObj)) 
+        IRIT_PRSR_SET_POLYGON_OBJ(PObj);
     
     if (PObj -> Pnext != NULL) 
         HWCConvertPolylinesToPolygons(PObj -> Pnext);
@@ -1859,7 +1877,7 @@ static void HWCConvertPolylinesToPolygons(IPObjectStruct *PObj) {
 * OutputGCodePath:  Path to output GCode file.                               M
 * NumViews:         Number of view directions to generate.                   M
 * OutputITDType:    0 to skip ITD, 1 for polylines, 2 for polygons.          M
-* ITDLength:        Wire path visualization length (0.0 for default).        M
+* RulingExtent:        Wire path visualization length (0.0 for default).        M
 * fileName:         Name of the output ITD file.                             M
 * uniformCut:       View selection mode. 0 to use score-based best-view      M
 *                   selection (HWCSelectBestViewSampling), 1 to use          M
@@ -1876,15 +1894,15 @@ static void HWCConvertPolylinesToPolygons(IPObjectStruct *PObj) {
 * KEYWORDS:                                                                  M
 *   HWCGenerateGCodeFromObj, hot-wire, GCode, pipeline.                      M
 *****************************************************************************/
-IrtRType HWCGenerateGCodeFromObj(IPObjectStruct *RawModel,
+IrtRType HWCGenerateGCodeFromObj(IritPrsrObjectStruct *RawModel,
                                  const char *OutputGCodePath,
                                  IrtRType NumViews,
                                  IrtRType OutputITDType,
-                                 IrtRType ITDLength,
+                                 IrtRType RulingExtent,
                                  const char *fileName,
                                  int uniformCut)
 {
-    IPObjectStruct *Contour, *RuledSrf, *SimObj, *AllSimObjs,
+    IritPrsrObjectStruct *Contour, *RuledSrf, *SimObj, *AllSimObjs,
         *Solid = NULL;
     IrtHmgnMatType
         *Views = NULL;
@@ -1909,24 +1927,24 @@ IrtRType HWCGenerateGCodeFromObj(IPObjectStruct *RawModel,
     RawModel = NULL;
 
     Solid = IritPrsrFlattenTree(Solid);
-#ifdef DEBUG
+#ifdef DEBUG_HOT_WIRE_CUT_ALG2
     printf("Model ready. Type = %d.\n", Solid -> ObjType);
     fflush(stdout);
-#endif /* DEBUG */
+#endif /* DEBUG_HOT_WIRE_CUT_ALG2 */
 
     /* Save a copy as OBJ for visual inspection. */
-#ifdef DEBUG
+#ifdef DEBUG_HOT_WIRE_CUT_ALG2
     printf("Saving solid.obj...\n"); fflush(stdout);
     if (IritPrsrOBJSaveFile(Solid, "solid.obj", FALSE, 2, 0))
         printf("Wrote solid.obj.\n");
     fflush(stdout);
-#endif /* DEBUG */
+#endif /* DEBUG_HOT_WIRE_CUT_ALG2 */
 
     /* 2. Select best view directions. */
-#ifdef DEBUG
+#ifdef DEBUG_HOT_WIRE_CUT_ALG2
     printf("Selecting %d best view directions...\n", NumViews);
     fflush(stdout);
-#endif /* DEBUG */
+#endif /* DEBUG_HOT_WIRE_CUT_ALG2 */
 
     if (uniformCut) 
         Views = HWCSelectViewsSampling(NumViews);
@@ -1952,21 +1970,21 @@ IrtRType HWCGenerateGCodeFromObj(IPObjectStruct *RawModel,
         if (Views != NULL) 
             IritFree(Views);
     }
-#ifdef DEBUG 
+#ifdef DEBUG_HOT_WIRE_CUT_ALG2 
     printf("View sampling done.\n");
     fflush(stdout);
-#endif /* DEBUG */
+#endif /* DEBUG_HOT_WIRE_CUT_ALG2 */
 
     /* 3. Set up HWC machine parameters. */
     IritPrsrHWCSetDfltParams(&HWCParams);
     HWCParams.MinimalHeight = 0.1;
-    HWCParams.RuledApproxDir = CAGD_CONST_U_DIR;
+    HWCParams.RuledApproxDir = IRIT_CAGD_CONST_U_DIR;
     HWCParams.PieceWiseRuledApproximation = 0.01;
-    if (ITDLength > 0.0) 
-        HWCParams.SimulationArcLength = ITDLength;
+    if (RulingExtent > 0.0) 
+        HWCParams.SimulationArcLength = RulingExtent;
 
     /* 4. Allocate temporary GCode file list. */
-    gcodeFiles = (char** )IritMalloc(sizeof(char*) * NumViews);
+    gcodeFiles = (char** )IritMalloc(sizeof(char*) * (int) NumViews);
     if (gcodeFiles == NULL) {
         fprintf(stderr, "Failed to allocate GCode file list.\n");
 
@@ -1996,10 +2014,10 @@ IrtRType HWCGenerateGCodeFromObj(IPObjectStruct *RawModel,
         SimObj = NULL;
 
         /* 5a. Approximate silhouette contour. */
-#ifdef DEBUG
+#ifdef DEBUG_HOT_WIRE_CUT_ALG2
         printf("  View %d: Computing silhouette contour...\n", vi);
         fflush(stdout);
-#endif /* DEBUG */
+#endif /* DEBUG_HOT_WIRE_CUT_ALG2 */
 
         Contour = HWCIritPrsrApproxBSplineContourFromSolidView(Solid,
             Views[vi],
@@ -2011,7 +2029,7 @@ IrtRType HWCGenerateGCodeFromObj(IPObjectStruct *RawModel,
         }
 
         /* Save the raw 2D contour polygon for inspection. */
-#ifdef DEBUG
+#ifdef DEBUG_HOT_WIRE_CUT_ALG2
         snprintf(contourFile, sizeof(contourFile),
             "contour_view%d.obj", vi);
         fflush(stdout);
@@ -2019,13 +2037,13 @@ IrtRType HWCGenerateGCodeFromObj(IPObjectStruct *RawModel,
             fprintf(stderr, "Failed saving %s.\n", contourFile);
         else
             printf("Wrote %s\n", contourFile);
-#endif /* DEBUG */
+#endif /* DEBUG_HOT_WIRE_CUT_ALG2 */
 
         /* 5b. Build ruled surface. */
-#ifdef DEBUG
+#ifdef DEBUG_HOT_WIRE_CUT_ALG2
         printf("  View %d: Building ruled surface...\n", vi);
         fflush(stdout);
-#endif /* DEBUG */
+#endif /* DEBUG_HOT_WIRE_CUT_ALG2 */
         RuledSrf = HWCBuildSilhouetteRuledSrf(Contour, Solid, Views[vi],
             &HWCParams);
         IritPrsrFreeObject(Contour);
@@ -2038,7 +2056,7 @@ IrtRType HWCGenerateGCodeFromObj(IPObjectStruct *RawModel,
         }
 
         /* 5c. Generate GCode for this view. */
-#ifdef DEBUG
+#ifdef DEBUG_HOT_WIRE_CUT_ALG2
         printf("  View %d: Generating GCode...\n", vi);
         fflush(stdout);
 #endif
@@ -2051,9 +2069,9 @@ IrtRType HWCGenerateGCodeFromObj(IPObjectStruct *RawModel,
         RuledSrf = NULL;
 
         if (SimObj != NULL) {
-#ifdef DEBUG
+#ifdef DEBUG_HOT_WIRE_CUT_ALG2
             printf("View %d: GCode written to %s\n", vi, gcodeFile);
-#endif /* DEBUG */
+#endif /* DEBUG_HOT_WIRE_CUT_ALG2 */
 
             /* Append to AllSimObjs to combine all paths. */
             IritPrsrListObjectAppend(AllSimObjs, SimObj);
@@ -2071,10 +2089,10 @@ IrtRType HWCGenerateGCodeFromObj(IPObjectStruct *RawModel,
 
     /* 6. Combine all per-view GCode files. */
     if (gcodeCount > 0) {
-#ifdef DEBUG
+#ifdef DEBUG_HOT_WIRE_CUT_ALG2
         printf("Combining %d GCode files...\n", gcodeCount);
         fflush(stdout);
-#endif /* DEBUG */
+#endif /* DEBUG_HOT_WIRE_CUT_ALG2 */
         HWCCombineGCodeFiles((const char const**)gcodeFiles, gcodeCount,
             OutputGCodePath, &HWCParams);
         result = 1;
@@ -2091,9 +2109,9 @@ IrtRType HWCGenerateGCodeFromObj(IPObjectStruct *RawModel,
                 HWCConvertPolylinesToPolygons(AllSimObjs);
             }
             IritPrsrPutObjectToFile3(fileName, AllSimObjs, 0);
-#ifdef DEBUG
+#ifdef DEBUG_HOT_WIRE_CUT_ALG2
             printf("All path geometries written to %s\n", fileName);
-#endif /* DEBUG */
+#endif /* DEBUG_HOT_WIRE_CUT_ALG2 */
         }
 
         IritPrsrFreeObject(AllSimObjs);
@@ -2104,9 +2122,9 @@ IrtRType HWCGenerateGCodeFromObj(IPObjectStruct *RawModel,
     if (gcodeFiles != NULL) {
         for (i = 0; i < gcodeCount; ++i) {
             if (gcodeFiles[i] != NULL) {
-#ifndef DEBUG
+#ifndef DEBUG_HOT_WIRE_CUT_ALG2
                 remove(gcodeFiles[i]);
-#endif /* DEBUG */
+#endif /* DEBUG_HOT_WIRE_CUT_ALG2 */
                 IritFree(gcodeFiles[i]);
             }
         }
