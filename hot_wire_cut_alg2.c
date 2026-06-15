@@ -131,8 +131,8 @@ static int HWCIritPrsrBuildViewBasisFromMat(const IrtHmgnMatType Mat,
                                             IrtVecType w,
                                             int AllowDefault)
 {
-    IrtVecType arb;
-    IrtRType wlen, ul;
+    IrtVecType Arb;
+    IrtRType wLen, Ul;
 
     /* Extract forward vector from third *row* of matrix (Mat[2][0..2]). */
     /* The view/LookAt code in this file stores rotation in rows, so the */
@@ -141,8 +141,8 @@ static int HWCIritPrsrBuildViewBasisFromMat(const IrtHmgnMatType Mat,
     w[1] = Mat[2][1];
     w[2] = Mat[2][2];
 
-    wlen = sqrt(IRIT_SQR(w[0]) + IRIT_SQR(w[1]) + IRIT_SQR(w[2]));
-    if (wlen <= IRIT_EPS) {
+    wLen = sqrt(IRIT_SQR(w[0]) + IRIT_SQR(w[1]) + IRIT_SQR(w[2]));
+    if (wLen <= IRIT_EPS) {
         if (!AllowDefault)
             return 0;
         /* Fallback to canonical forward if allowed. */
@@ -151,48 +151,48 @@ static int HWCIritPrsrBuildViewBasisFromMat(const IrtHmgnMatType Mat,
         w[2] = 1.0;
     }
     else {
-        w[0] /= wlen;
-        w[1] /= wlen;
-        w[2] /= wlen;
+        w[0] /= wLen;
+        w[1] /= wLen;
+        w[2] /= wLen;
     }
 
     /* Choose stable arbitrary vector not parallel to w. */
     if (fabs(w[0]) < 0.9) {
-        arb[0] = 1.0;
-        arb[1] = 0.0;
-        arb[2] = 0.0;
+        Arb[0] = 1.0;
+        Arb[1] = 0.0;
+        Arb[2] = 0.0;
     }
     else {
-        arb[0] = 0.0;
-        arb[1] = 1.0;
-        arb[2] = 0.0;
+        Arb[0] = 0.0;
+        Arb[1] = 1.0;
+        Arb[2] = 0.0;
     }
 
     /* u = normalize(cross(arb, w)). */
-    u[0] = arb[1] * w[2] - arb[2] * w[1];
-    u[1] = arb[2] * w[0] - arb[0] * w[2];
-    u[2] = arb[0] * w[1] - arb[1] * w[0];
+    u[0] = Arb[1] * w[2] - Arb[2] * w[1];
+    u[1] = Arb[2] * w[0] - Arb[0] * w[2];
+    u[2] = Arb[0] * w[1] - Arb[1] * w[0];
 
-    ul = sqrt(IRIT_SQR(u[0]) + IRIT_SQR(u[1]) + IRIT_SQR(u[2]));
-    if (ul <= IRIT_EPS) {
+    Ul = sqrt(IRIT_SQR(u[0]) + IRIT_SQR(u[1]) + IRIT_SQR(u[2]));
+    if (Ul <= IRIT_EPS) {
         /* Extremely unlikely; if allowed try a different arb, else fail. */
         if (!AllowDefault)
             return 0;
         /* Try fallback arb. */
-        arb[0] = 0.0;
-        arb[1] = 1.0;
-        arb[2] = 0.0;
-        u[0] = arb[1] * w[2] - arb[2] * w[1];
-        u[1] = arb[2] * w[0] - arb[0] * w[2];
-        u[2] = arb[0] * w[1] - arb[1] * w[0];
-        ul = sqrt(IRIT_SQR(u[0]) + IRIT_SQR(u[1]) + IRIT_SQR(u[2]));
-        if (ul <= IRIT_EPS)
+        Arb[0] = 0.0;
+        Arb[1] = 1.0;
+        Arb[2] = 0.0;
+        u[0] = Arb[1] * w[2] - Arb[2] * w[1];
+        u[1] = Arb[2] * w[0] - Arb[0] * w[2];
+        u[2] = Arb[0] * w[1] - Arb[1] * w[0];
+        Ul = sqrt(IRIT_SQR(u[0]) + IRIT_SQR(u[1]) + IRIT_SQR(u[2]));
+        if (Ul <= IRIT_EPS)
             return 0;
     }
 
-    u[0] /= ul;
-    u[1] /= ul;
-    u[2] /= ul;
+    u[0] /= Ul;
+    u[1] /= Ul;
+    u[2] /= Ul;
 
     /* v = cross(w, u). */
     v[0] = w[1] * u[2] - w[2] * u[1];
@@ -279,7 +279,7 @@ static void HWCGenLookAtMatrix(IrtVecType Eye,
 static IrtRType HWCCalcPolygonArea(IritPrsrObjectStruct *PObj)
 {
     IrtRType
-        area = 0.0;
+        Area = 0.0;
     IritPrsrPolygonStruct *Pl;
 
     if (PObj == NULL || !IRIT_PRSR_IS_POLY_OBJ(PObj))
@@ -287,9 +287,9 @@ static IrtRType HWCCalcPolygonArea(IritPrsrObjectStruct *PObj)
 
     for (Pl = PObj -> U.Pl; Pl != NULL; Pl = Pl -> Pnext) {
         /* Uses IRIT's built-in area function. */
-        area += IritGeomPolyOnePolyArea(Pl, TRUE);
+        Area += IritGeomPolyOnePolyArea(Pl, TRUE);
     }
-    return area;
+    return Area;
 }
 
 /*****************************************************************************
@@ -349,13 +349,13 @@ static IritPrsrObjectStruct *HWCBuildProjectUnionLocal(
                                                   IritPrsrObjectStruct *Solid,
 						  IrtHmgnMatType MatLocal)
 {
-    IrtRType dx, dy, margin,
-        minx = IRIT_INFNTY,
-        miny = IRIT_INFNTY,
-        maxx = -IRIT_INFNTY,
-        maxy = -IRIT_INFNTY;
-    unsigned char *grid;
-    int *px, *py, *ints, x, y, i, j,
+    IrtRType Dx, Dy, Margin,
+        minX = IRIT_INFNTY,
+        minY = IRIT_INFNTY,
+        maxX = -IRIT_INFNTY,
+        maxY = -IRIT_INFNTY;
+    unsigned char *Grid;
+    int *Px, *Py, *Ints, x, y, i, j,
         startX = -1,
         startY = -1;
     IritPrsrPolygonStruct *Pl;
@@ -365,119 +365,119 @@ static IritPrsrObjectStruct *HWCBuildProjectUnionLocal(
 
     /* 1. Project points to local XY, collect them to compute bounding box. */
     for (Pl = Solid -> U.Pl; Pl != NULL; Pl = Pl -> Pnext) {
-        IritPrsrVertexStruct *cur,
+        IritPrsrVertexStruct *Cur,
             * V = Pl->PVertex;
-        int guard = 0;
+        int Guard = 0;
 
         if (V == NULL)
             continue;
-        cur = V;
+        Cur = V;
         do {
             IrtPtType localP;
 
-            IritMiscMatMultPtby4by4(localP, cur->Coord, MatLocal);
-            if (localP[0] < minx)
-                minx = localP[0];
-            if (localP[1] < miny)
-                miny = localP[1];
-            if (localP[0] > maxx)
-                maxx = localP[0];
-            if (localP[1] > maxy)
-                maxy = localP[1];
+            IritMiscMatMultPtby4by4(localP, Cur->Coord, MatLocal);
+            if (localP[0] < minX)
+                minX = localP[0];
+            if (localP[1] < minY)
+                minY = localP[1];
+            if (localP[0] > maxX)
+                maxX = localP[0];
+            if (localP[1] > maxY)
+                maxY = localP[1];
 
-            cur = cur->Pnext;
-            if (++guard > 200000)
+            Cur = Cur->Pnext;
+            if (++Guard > 200000)
                 break;
-        } while (cur != NULL && cur != V);
+        } while (Cur != NULL && Cur != V);
     }
 
-    if (minx > maxx)
+    if (minX > maxX)
         return NULL;
 
     /* Add a small 5% margin to prevent tracing out of bounds. */
-    dx = maxx - minx;
-    dy = maxy - miny;
-    margin = IRIT_MAX(dx, dy) * 0.05;
-    if (margin < 1e-5)
-        margin = 1e-5;
-    minx -= margin;
-    maxx += margin;
-    miny -= margin;
-    maxy += margin;
-    dx = maxx - minx;
-    dy = maxy - miny;
+    Dx = maxX - minX;
+    Dy = maxY - minY;
+    Margin = IRIT_MAX(Dx, Dy) * 0.05;
+    if (Margin < 1e-5)
+        Margin = 1e-5;
+    minX -= Margin;
+    maxX += Margin;
+    minY -= Margin;
+    maxY += Margin;
+    Dx = maxX - minX;
+    Dy = maxY - minY;
 
     /* 2. Allocate and clear 2D grid. */
-    grid = (unsigned char *) IritMalloc(HWCSIL_GRID_RES * HWCSIL_GRID_RES);
-    memset(grid, 0, HWCSIL_GRID_RES * HWCSIL_GRID_RES);
+    Grid = (unsigned char *) IritMalloc(HWCSIL_GRID_RES * HWCSIL_GRID_RES);
+    memset(Grid, 0, HWCSIL_GRID_RES * HWCSIL_GRID_RES);
 
     /* Assume max polygon vertex count <= 4096. */
-    px = (int*) IritMalloc(sizeof(int) * 4096);
-    py = (int*) IritMalloc(sizeof(int) * 4096);
-    ints = (int*) IritMalloc(sizeof(int) * 4096);
+    Px = (int*) IritMalloc(sizeof(int) * 4096);
+    Py = (int*) IritMalloc(sizeof(int) * 4096);
+    Ints = (int*) IritMalloc(sizeof(int) * 4096);
 
     /* 3. Scanline fill each projected polygon. */
     for (Pl = Solid -> U.Pl; Pl != NULL; Pl = Pl -> Pnext) {
-        IritPrsrVertexStruct *cur,
+        IritPrsrVertexStruct *Cur,
             *V = Pl -> PVertex;
-        int pminy, pmaxy,
-            npts = 0,
-            guard = 0;
+        int pminY, pmaxY,
+            nPts = 0,
+            Guard = 0;
 
         if (V == NULL)
             continue;
 
-        cur = V;
+        Cur = V;
         do {
             IrtPtType localP;
-            int pxVal, pyVal;
+            int PxVal, PyVal;
 
-            IritMiscMatMultPtby4by4(localP, cur -> Coord, MatLocal);
+            IritMiscMatMultPtby4by4(localP, Cur -> Coord, MatLocal);
 
-            pxVal = (int) ((localP[0] - minx) / dx * (HWCSIL_GRID_RES - 1));
-            pyVal = (int) ((localP[1] - miny) / dy * (HWCSIL_GRID_RES - 1));
-            if (pxVal < 0)
-                pxVal = 0;
-            if (pxVal >= HWCSIL_GRID_RES)
-                pxVal = HWCSIL_GRID_RES - 1;
-            if (pyVal < 0)
-                pyVal = 0;
-            if (pyVal >= HWCSIL_GRID_RES)
-                pyVal = HWCSIL_GRID_RES - 1;
+            PxVal = (int) ((localP[0] - minX) / Dx * (HWCSIL_GRID_RES - 1));
+            PyVal = (int) ((localP[1] - minY) / Dy * (HWCSIL_GRID_RES - 1));
+            if (PxVal < 0)
+                PxVal = 0;
+            if (PxVal >= HWCSIL_GRID_RES)
+                PxVal = HWCSIL_GRID_RES - 1;
+            if (PyVal < 0)
+                PyVal = 0;
+            if (PyVal >= HWCSIL_GRID_RES)
+                PyVal = HWCSIL_GRID_RES - 1;
 
-            if (npts < 4096) {
-                px[npts] = pxVal;
-                py[npts] = pyVal;
-                npts++;
+            if (nPts < 4096) {
+                Px[nPts] = PxVal;
+                Py[nPts] = PyVal;
+                nPts++;
             }
-            cur = cur -> Pnext;
-            if (++guard > 200000)
+            Cur = Cur -> Pnext;
+            if (++Guard > 200000)
                 break;
-        } while (cur != NULL && cur != V);
+        } while (Cur != NULL && Cur != V);
 
-        if (npts < 3)
+        if (nPts < 3)
             continue;
 
         /* Scanline logic */
-        pminy = HWCSIL_GRID_RES;
-        pmaxy = -1;
-        for (i = 0; i < npts; ++i) {
-            if (py[i] < pminy)
-                pminy = py[i];
-            if (py[i] > pmaxy)
-                pmaxy = py[i];
+        pminY = HWCSIL_GRID_RES;
+        pmaxY = -1;
+        for (i = 0; i < nPts; ++i) {
+            if (Py[i] < pminY)
+                pminY = Py[i];
+            if (Py[i] > pmaxY)
+                pmaxY = Py[i];
         }
 
-        for (y = pminy; y <= pmaxy; ++y) {
+        for (y = pminY; y <= pmaxY; ++y) {
             int a, b,
                 count = 0;
 
-            for (i = 0; i < npts; ++i) {
-                int jIdx = (i + 1) % npts,
-                    y1 = py[i],
-                    y2 = py[jIdx],
-                    x1 = px[i],
-                    x2 = px[jIdx];
+            for (i = 0; i < nPts; ++i) {
+                int jIDx = (i + 1) % nPts,
+                    y1 = Py[i],
+                    y2 = Py[jIDx],
+                    x1 = Px[i],
+                    x2 = Px[jIDx];
 
                 if (y1 == y2)
                     continue;
@@ -485,7 +485,7 @@ static IritPrsrObjectStruct *HWCBuildProjectUnionLocal(
                 if ((y1 <= y && y < y2) || (y2 <= y && y < y1)) {
                     int xInt = x1 + (y - y1) * (x2 - x1) / (y2 - y1);
                     if (count < 4096) {
-                        ints[count++] = xInt;
+                        Ints[count++] = xInt;
                     }
                 }
             }
@@ -493,11 +493,11 @@ static IritPrsrObjectStruct *HWCBuildProjectUnionLocal(
             /* Sort intersections. */
             for (a = 0; a < count - 1; ++a) {
                 for (b = a + 1; b < count; ++b) {
-                    if (ints[a] > ints[b]) {
-                        int tmp = ints[a];
+                    if (Ints[a] > Ints[b]) {
+                        int tmp = Ints[a];
 
-                        ints[a] = ints[b];
-                        ints[b] = tmp;
+                        Ints[a] = Ints[b];
+                        Ints[b] = tmp;
                     }
                 }
             }
@@ -505,8 +505,8 @@ static IritPrsrObjectStruct *HWCBuildProjectUnionLocal(
             /* Fill pairs. */
             for (a = 0; a < count; a += 2) {
                 if (a + 1 < count) {
-                    int xStart = ints[a];
-                    int xEnd = ints[a + 1];
+                    int xStart = Ints[a];
+                    int xEnd = Ints[a + 1];
                     int xVal;
 
                     if (xStart < 0)
@@ -514,21 +514,21 @@ static IritPrsrObjectStruct *HWCBuildProjectUnionLocal(
                     if (xEnd >= HWCSIL_GRID_RES)
                         xEnd = HWCSIL_GRID_RES - 1;
                     for (xVal = xStart; xVal <= xEnd; ++xVal) {
-                        grid[y * HWCSIL_GRID_RES + xVal] = 1;
+                        Grid[y * HWCSIL_GRID_RES + xVal] = 1;
                     }
                 }
             }
         }
     }
 
-    IritFree(px);
-    IritFree(py);
-    IritFree(ints);
+    IritFree(Px);
+    IritFree(Py);
+    IritFree(Ints);
 
     /* 4. Find starting pixel for Moore Neighborhood Tracing. */
     for (y = 0; y < HWCSIL_GRID_RES; ++y) {
         for (x = 0; x < HWCSIL_GRID_RES; ++x) {
-            if (grid[y * HWCSIL_GRID_RES + x]) {
+            if (Grid[y * HWCSIL_GRID_RES + x]) {
                 startX = x;
                 startY = y;
                 break;
@@ -538,7 +538,7 @@ static IritPrsrObjectStruct *HWCBuildProjectUnionLocal(
     }
 
     if (startX == -1) {
-        IritFree(grid);
+        IritFree(Grid);
         return NULL;
     }
 
@@ -548,54 +548,54 @@ static IritPrsrObjectStruct *HWCBuildProjectUnionLocal(
             xDy[8] = { -1, -1, 0, 1, 1, 1, 0, -1 },
             maxPath = HWCSIL_GRID_RES * HWCSIL_GRID_RES,
             pathLen = 0,
-            cx = startX,
-            cy = startY,
+            Cx = startX,
+            Cy = startY,
             firstStep = 1,
-            dir = 2,   /* Pretend we moved East (2), so left is North (0). */
+            Dir = 2,   /* Pretend we moved East (2), so left is North (0). */
             *pathX = (int*) IritMalloc(sizeof(int) * maxPath),
             *pathY = (int*) IritMalloc(sizeof(int) * maxPath);
 
         do {
             int nextDir, i,
-                found = 0;
+                Found = 0;
 
             if (pathLen < maxPath) {
-                pathX[pathLen] = cx;
-                pathY[pathLen] = cy;
+                pathX[pathLen] = Cx;
+                pathY[pathLen] = Cy;
                 pathLen++;
             }
             else break;
 
             for (i = 0; i < 8; ++i) {
-                int nx, ny; 
+                int Nx, Ny; 
 
                 /* Turn 135 deg left to ensure we trace outside boundary. */
-                nextDir = (dir + 5 + i) % 8;
-                nx = cx + xDx[nextDir];
-                ny = cy + xDy[nextDir];
+                nextDir = (Dir + 5 + i) % 8;
+                Nx = Cx + xDx[nextDir];
+                Ny = Cy + xDy[nextDir];
 
-                if (nx >= 0 &&
-		    nx < HWCSIL_GRID_RES && ny >= 0 &&
-		    ny < HWCSIL_GRID_RES) {
-                    if (grid[ny * HWCSIL_GRID_RES + nx]) {
-                        cx = nx;
-                        cy = ny;
-                        dir = nextDir;
-                        found = 1;
+                if (Nx >= 0 &&
+		    Nx < HWCSIL_GRID_RES && Ny >= 0 &&
+		    Ny < HWCSIL_GRID_RES) {
+                    if (Grid[Ny * HWCSIL_GRID_RES + Nx]) {
+                        Cx = Nx;
+                        Cy = Ny;
+                        Dir = nextDir;
+                        Found = 1;
                         break;
                     }
                 }
             }
 
-            if (!found) break; /* Isolated pixel. */
+            if (!Found) break; /* Isolated pixel. */
 
-            if (!firstStep && cx == startX && cy == startY) {
+            if (!firstStep && Cx == startX && Cy == startY) {
                 break;
             }
             firstStep = 0;
         } while (1);
 
-        IritFree(grid);
+        IritFree(Grid);
 
         if (pathLen < 3) {
             IritFree(pathX);
@@ -618,10 +618,10 @@ static IritPrsrObjectStruct *HWCBuildProjectUnionLocal(
                 IritPrsrVertexStruct
                     *NV = IritPrsrAllocVertex2(NULL);
 
-                NV -> Coord[0] = minx +
-		                 pathX[iPath] * dx / (HWCSIL_GRID_RES - 1);
-                NV -> Coord[1] = miny +
-		                 pathY[iPath] * dy / (HWCSIL_GRID_RES - 1);
+                NV -> Coord[0] = minX +
+		                 pathX[iPath] * Dx / (HWCSIL_GRID_RES - 1);
+                NV -> Coord[1] = minY +
+		                 pathY[iPath] * Dy / (HWCSIL_GRID_RES - 1);
                 NV -> Coord[2] = 0.0;
                 if (FirstV == NULL)
                     FirstV = PrevV = NV;
@@ -720,12 +720,12 @@ static IritPrsrObjectStruct *HWCIritPrsrApproxBSplineContourFromSolidView(
     IrtHmgnMatType MatLocal, InvMat;
     IritPrsrObjectStruct *UnionLocal, *Poly, *FinalObj;
     IritPrsrPolygonStruct *Pl, *FinalPl;
-    IritPrsrVertexStruct *V, *cur,
+    IritPrsrVertexStruct *V, *Cur,
         *FirstV = NULL,
         *PrevV = NULL;
-    IrtPtType *pts, *tmpPts;
-    int i, it, step,
-        npts = 0,
+    IrtPtType *Pts, *tmpPts;
+    int i, It, Step,
+        nPts = 0,
         smoothIters = 5;
 
     if (Solid == NULL || !IRIT_PRSR_IS_POLY_OBJ(Solid))
@@ -764,47 +764,47 @@ static IritPrsrObjectStruct *HWCIritPrsrApproxBSplineContourFromSolidView(
 
     Pl = Poly -> U.Pl;
     V = Pl -> PVertex;
-    cur = V;
+    Cur = V;
     do {
-        npts++;
-        cur = cur -> Pnext;
-    } while (cur != NULL && cur != V);
+        nPts++;
+        Cur = Cur -> Pnext;
+    } while (Cur != NULL && Cur != V);
 
-    pts = (IrtPtType *) IritMalloc(sizeof(IrtPtType) * npts);
-    tmpPts = (IrtPtType *) IritMalloc(sizeof(IrtPtType) * npts);
+    Pts = (IrtPtType *) IritMalloc(sizeof(IrtPtType) * nPts);
+    tmpPts = (IrtPtType *) IritMalloc(sizeof(IrtPtType) * nPts);
 
-    cur = V;
-    for (i = 0; i < npts; ++i) {
-        pts[i][0] = cur -> Coord[0];
-        pts[i][1] = cur -> Coord[1];
-        pts[i][2] = 0.0;
-        cur = cur -> Pnext;
+    Cur = V;
+    for (i = 0; i < nPts; ++i) {
+        Pts[i][0] = Cur -> Coord[0];
+        Pts[i][1] = Cur -> Coord[1];
+        Pts[i][2] = 0.0;
+        Cur = Cur -> Pnext;
     }
 
     /* Laplacian smoothing to remove pixel stair-stepping artifacts. */
-    for (it = 0; it < smoothIters; ++it) {
-        for (i = 0; i < npts; ++i) {
-            int im1 = (i - 1 + npts) % npts,
-                ip1 = (i + 1) % npts;
+    for (It = 0; It < smoothIters; ++It) {
+        for (i = 0; i < nPts; ++i) {
+            int Im1 = (i - 1 + nPts) % nPts,
+                Ip1 = (i + 1) % nPts;
 
-            tmpPts[i][0] = (pts[im1][0] + pts[ip1][0] + pts[i][0]) / 3.0;
-            tmpPts[i][1] = (pts[im1][1] + pts[ip1][1] + pts[i][1]) / 3.0;
+            tmpPts[i][0] = (Pts[Im1][0] + Pts[Ip1][0] + Pts[i][0]) / 3.0;
+            tmpPts[i][1] = (Pts[Im1][1] + Pts[Ip1][1] + Pts[i][1]) / 3.0;
             tmpPts[i][2] = 0.0;
         }
-        memcpy(pts, tmpPts, sizeof(IrtPtType) * npts);
+        memcpy(Pts, tmpPts, sizeof(IrtPtType) * nPts);
     }
 
     /* Subsample points. */
-    step = npts / NumCtrl;
-    if (step < 1) step = 1;
+    Step = nPts / NumCtrl;
+    if (Step < 1) Step = 1;
 
     FinalPl = IritPrsrAllocPolygon(0, NULL, NULL);
 
-    for (i = 0; i < npts; i += step) {
+    for (i = 0; i < nPts; i += Step) {
         IrtPtType worldP;
         IritPrsrVertexStruct *NV;
 
-        IritMiscMatMultPtby4by4(worldP, pts[i], MatLocal);
+        IritMiscMatMultPtby4by4(worldP, Pts[i], MatLocal);
         NV = IritPrsrAllocVertex2(NULL);
         NV -> Coord[0] = worldP[0];
         NV -> Coord[1] = worldP[1];
@@ -815,7 +815,7 @@ static IritPrsrObjectStruct *HWCIritPrsrApproxBSplineContourFromSolidView(
             PrevV -> Pnext = NV; PrevV = NV;
     }
 
-    IritFree(pts);
+    IritFree(Pts);
     IritFree(tmpPts);
     IritPrsrFreeObject(UnionLocal);
 
@@ -884,9 +884,9 @@ static IrtHmgnMatType *HWCSelectBestViewSampling(IritPrsrObjectStruct *PObj,
                                                  int NumSamples,
                                                  IrtHmgnMatType *ResultMat)
 {
-    int next, s, i, j, best;
+    int Next, s, i, j, Best;
     IrtHmgnMatType *ViewMats;
-    IrtRType *scores;
+    IrtRType *Scores;
     const int 
         NumCtrl = 128;
 
@@ -900,17 +900,17 @@ static IrtHmgnMatType *HWCSelectBestViewSampling(IritPrsrObjectStruct *PObj,
     if (ViewMats == NULL)
         return NULL;
 
-    next = 0;
+    Next = 0;
 
     /* Generate candidate view matrices (Uniform circle in XY plane). */
     for (s = 0; s < NumSamples; ++s) {
         IrtRType
-            theta = 2.0 * 3.14159265358979323846 * s / NumSamples;
+            Theta = 2.0 * 3.14159265358979323846 * s / NumSamples;
         IrtRType r = 2.0;
         IrtVecType CamPos, Center, Up;
 
-        CamPos[0] = cos(theta) * r;
-        CamPos[1] = sin(theta) * r;
+        CamPos[0] = cos(Theta) * r;
+        CamPos[1] = sin(Theta) * r;
         CamPos[2] = 0.0;          /* Fixed Z value, no variation in height. */
 
         Center[0] = 0.0;
@@ -921,11 +921,11 @@ static IrtHmgnMatType *HWCSelectBestViewSampling(IritPrsrObjectStruct *PObj,
         Up[1] = 0.0;
         Up[2] = 1.0;
 
-        HWCGenLookAtMatrix(CamPos, Center, Up, ViewMats[next++]);
+        HWCGenLookAtMatrix(CamPos, Center, Up, ViewMats[Next++]);
     }
 
-    scores = (IrtRType*) IritMalloc(sizeof(IrtRType) * NumSamples);
-    if (scores == NULL) {
+    Scores = (IrtRType*) IritMalloc(sizeof(IrtRType) * NumSamples);
+    if (Scores == NULL) {
         IritFree(ViewMats);
         return NULL;
     }
@@ -934,7 +934,7 @@ static IrtHmgnMatType *HWCSelectBestViewSampling(IritPrsrObjectStruct *PObj,
         IritPrsrObjectStruct *Contour;
         IrtRType wxyLen;
 
-        scores[i] = 0.0;
+        Scores[i] = 0.0;
 
         /* Reject near-vertical views (where wxyLen < 0.1) since the       */
 	/* horizontal wire cannot reach the required vertical slope.        */
@@ -948,7 +948,7 @@ static IrtHmgnMatType *HWCSelectBestViewSampling(IritPrsrObjectStruct *PObj,
 							       ViewMats[i],
 							       NumCtrl);
         if (Contour != NULL) {
-            scores[i] = HWCCalcPolygonArea(Contour);
+            Scores[i] = HWCCalcPolygonArea(Contour);
             IritPrsrFreeObject(Contour);
         }
     }
@@ -956,21 +956,21 @@ static IrtHmgnMatType *HWCSelectBestViewSampling(IritPrsrObjectStruct *PObj,
     /* Reorder ViewMats in-place by descending score (simple selection      */
     /* sort).							            */
     for (i = 0; i < NumSamples - 1; ++i) {
-        best = i;
+        Best = i;
         for (j = i + 1; j < NumSamples; ++j) {
-            if (scores[j] > scores[best])
-                best = j;
+            if (Scores[j] > Scores[Best])
+                Best = j;
         }
-        if (best != i) {
+        if (Best != i) {
             IrtHmgnMatType tmpMat;
-            IrtRType tmpScore = scores[i];
+            IrtRType tmpScore = Scores[i];
 
             memcpy(tmpMat, ViewMats[i], sizeof(IrtHmgnMatType));
-            memcpy(ViewMats[i], ViewMats[best], sizeof(IrtHmgnMatType));
-            memcpy(ViewMats[best], tmpMat, sizeof(IrtHmgnMatType));
+            memcpy(ViewMats[i], ViewMats[Best], sizeof(IrtHmgnMatType));
+            memcpy(ViewMats[Best], tmpMat, sizeof(IrtHmgnMatType));
 
-            scores[i] = scores[best];
-            scores[best] = tmpScore;
+            Scores[i] = Scores[Best];
+            Scores[Best] = tmpScore;
         }
     }
 
@@ -987,11 +987,11 @@ static IrtHmgnMatType *HWCSelectBestViewSampling(IritPrsrObjectStruct *PObj,
         IrtRType fixedAngles[4] = { 0.0, 45.0, 90.0, 135.0 };
 
         for (i = 0; i < 4 && numSelected < RequestedViews; ++i) {
-            IrtRType theta = fixedAngles[i] * 3.14159265358979323846 / 180.0;
+            IrtRType Theta = fixedAngles[i] * 3.14159265358979323846 / 180.0;
             IrtVecType CamPos, Center, Up;
 
-            CamPos[0] = cos(theta) * 2.0;
-            CamPos[1] = sin(theta) * 2.0;
+            CamPos[0] = cos(Theta) * 2.0;
+            CamPos[1] = sin(Theta) * 2.0;
             CamPos[2] = 0.0;
             Center[0] = 0.0; Center[1] = 0.0; Center[2] = 0.0;
             Up[0] = 0.0; Up[1] = 0.0; Up[2] = 1.0;
@@ -1005,12 +1005,12 @@ static IrtHmgnMatType *HWCSelectBestViewSampling(IritPrsrObjectStruct *PObj,
             int isSimilar = 0;
 
             for (j = 0; j < numSelected; ++j) {
-                IrtRType dot =
+                IrtRType Dot =
                     ViewMats[i][2][0] * SelectedMats[j][2][0] +
                     ViewMats[i][2][1] * SelectedMats[j][2][1] +
                     ViewMats[i][2][2] * SelectedMats[j][2][2];
 
-                if (IRIT_FABS(dot) >
+                if (IRIT_FABS(Dot) >
                     cos(15.0 * 3.14159265358979323846 / 180.0)) {
                     isSimilar = 1;
                     break;
@@ -1029,11 +1029,11 @@ static IrtHmgnMatType *HWCSelectBestViewSampling(IritPrsrObjectStruct *PObj,
 
             for (j = 0; j < numSelected; ++j) {
                 IrtRType 
-                    dot = ViewMats[i][2][0] * SelectedMats[j][2][0] +
+                    Dot = ViewMats[i][2][0] * SelectedMats[j][2][0] +
                           ViewMats[i][2][1] * SelectedMats[j][2][1] +
                           ViewMats[i][2][2] * SelectedMats[j][2][2];
 
-                if (IRIT_FABS(dot) > 0.999) {
+                if (IRIT_FABS(Dot) > 0.999) {
                     isExact = 1;
                     break;
                 }
@@ -1052,7 +1052,7 @@ static IrtHmgnMatType *HWCSelectBestViewSampling(IritPrsrObjectStruct *PObj,
         memcpy(ResultMat, ViewMats, sizeof(IrtHmgnMatType) * NumSamples);
     }
 
-    IritFree(scores);
+    IritFree(Scores);
     return ViewMats;
 }
 
@@ -1076,7 +1076,7 @@ static IrtHmgnMatType *HWCSelectBestViewSampling(IritPrsrObjectStruct *PObj,
 static IrtHmgnMatType *HWCSelectViewsSampling(int NumSamples)
 {
     int i;
-    IrtRType step;
+    IrtRType Step;
     IrtHmgnMatType *ViewMats;
 
     if (NumSamples <= 0)
@@ -1089,15 +1089,15 @@ static IrtHmgnMatType *HWCSelectViewsSampling(int NumSamples)
 
     /* Space views by 180/N degrees so that no two views are mirrors of     */
     /* each other (a view at angle A covers the same silhouette as A + 180).*/
-    step = 180.0 / NumSamples;
+    Step = 180.0 / NumSamples;
 
     for (i = 0; i < NumSamples; ++i) {
         IrtRType
-	    theta = (step * i) * 3.14159265358979323846 / 180.0;
+	    Theta = (Step * i) * 3.14159265358979323846 / 180.0;
         IrtVecType CamPos, Center, Up;
 
-        CamPos[0] = cos(theta) * 2.0;
-        CamPos[1] = sin(theta) * 2.0;
+        CamPos[0] = cos(Theta) * 2.0;
+        CamPos[1] = sin(Theta) * 2.0;
         CamPos[2] = 0.0;
 
         Center[0] = 0.0;
@@ -1289,10 +1289,10 @@ static IritPrsrHWCEdgeStruct *HWCFindBoundaryEdges(
         /* Compute average Z of this loop's edge midpoints. */
         CurrentLoopAvgZ = 0.0;
         for (j = 0; j < CurrentLoopCount; j++) {
-            int ei = CurrentLoopIndices[j];
+            int Ei = CurrentLoopIndices[j];
 
-            CurrentLoopAvgZ += (RawBoundaryEdges[ei].Pt1[2] +
-                                RawBoundaryEdges[ei].Pt2[2]) * 0.5;
+            CurrentLoopAvgZ += (RawBoundaryEdges[Ei].Pt1[2] +
+                                RawBoundaryEdges[Ei].Pt2[2]) * 0.5;
         }
         if (CurrentLoopCount > 0)
             CurrentLoopAvgZ /= CurrentLoopCount;
@@ -1397,17 +1397,17 @@ static IritPrsrObjectStruct *HWCBuildSilhouetteRuledSrf(
 					  const IrtHmgnMatType ViewMat,
 					  const IritPrsrHWCDataStruct *Params)
 {
-    int k, n, guard,
+    int k, n, Guard,
         bestStart = 0,
         bestLen = 0,
         numBoundaryEdges = 0,
         topStart = 0,
         topLen = 0;
-    IrtRType minx, miny, maxx, maxy, scaleX, scaleZ, scale, cx, cy;
+    IrtRType minX, minY, maxX, maxY, scaleX, scaleZ, Scale, Cx, Cy;
     IrtVecType uVec, vVec, wVec;
     IrtHmgnMatType MatLocal;
-    IrtPtType *pts2d;
-    IritPrsrVertexStruct *V, *cur;
+    IrtPtType *Pts2d;
+    IritPrsrVertexStruct *V, *Cur;
     IritCagdCrvStruct *Crv;
     IritCagdVecStruct YDir;
     IritCagdSrfStruct *Srf;
@@ -1447,13 +1447,13 @@ static IritPrsrObjectStruct *HWCBuildSilhouetteRuledSrf(
     if (V == NULL) return NULL;
 
     n = 0;
-    cur = V;
-    guard = 0;
+    Cur = V;
+    Guard = 0;
     do {
         ++n;
-        cur = cur -> Pnext;
-        if (++guard > 200000) { n = 0; break; }
-    } while (cur != NULL && cur != V);
+        Cur = Cur -> Pnext;
+        if (++Guard > 200000) { n = 0; break; }
+    } while (Cur != NULL && Cur != V);
 
     if (n < 3) return NULL;
 
@@ -1462,49 +1462,49 @@ static IritPrsrObjectStruct *HWCBuildSilhouetteRuledSrf(
     /* 3. Project each vertex to view-local 2D, ignoring world Z.	    */
     /*   localP[0] = view-right component -> machine X			    */
     /*   localP[1] = view-up   component -> machine Z (vertical).	    */
-    pts2d = (IrtPtType*) IritMalloc(sizeof(IrtPtType) * n);
-    cur = V;
-    guard = 0;
+    Pts2d = (IrtPtType*) IritMalloc(sizeof(IrtPtType) * n);
+    Cur = V;
+    Guard = 0;
     for (k = 0; k < n; ++k) {
         /* Compute true dot products to project world coordinates onto the  */
         /* view plane.							    */
-        pts2d[k][0] = cur -> Coord[0] * uVec[0] + cur -> Coord[1] * uVec[1]
-            + cur -> Coord[2] * uVec[2];
-        pts2d[k][1] = cur -> Coord[0] * vVec[0] + cur -> Coord[1] * vVec[1]
-            + cur -> Coord[2] * vVec[2];
-        pts2d[k][2] = 0.0;
-        cur = cur -> Pnext;
-        if (cur == NULL || cur == V) 
+        Pts2d[k][0] = Cur -> Coord[0] * uVec[0] + Cur -> Coord[1] * uVec[1]
+            + Cur -> Coord[2] * uVec[2];
+        Pts2d[k][1] = Cur -> Coord[0] * vVec[0] + Cur -> Coord[1] * vVec[1]
+            + Cur -> Coord[2] * vVec[2];
+        Pts2d[k][2] = 0.0;
+        Cur = Cur -> Pnext;
+        if (Cur == NULL || Cur == V) 
             break;
-        if (++guard > 200000) 
+        if (++Guard > 200000) 
             break;
     }
 
     /* 4. Compute AABB. */
-    minx = maxx = pts2d[0][0];
-    miny = maxy = pts2d[0][1];
+    minX = maxX = Pts2d[0][0];
+    minY = maxY = Pts2d[0][1];
     for (k = 1; k < n; ++k) {
-        if (pts2d[k][0] < minx) 
-            minx = pts2d[k][0];
-        if (pts2d[k][0] > maxx) 
-            maxx = pts2d[k][0];
-        if (pts2d[k][1] < miny) 
-            miny = pts2d[k][1];
-        if (pts2d[k][1] > maxy) 
-            maxy = pts2d[k][1];
+        if (Pts2d[k][0] < minX) 
+            minX = Pts2d[k][0];
+        if (Pts2d[k][0] > maxX) 
+            maxX = Pts2d[k][0];
+        if (Pts2d[k][1] < minY) 
+            minY = Pts2d[k][1];
+        if (Pts2d[k][1] > maxY) 
+            maxY = Pts2d[k][1];
     }
 
-    if ((maxx - minx) < IRIT_EPS || (maxy - miny) < IRIT_EPS) {
-        IritFree(pts2d);
+    if ((maxX - minX) < IRIT_EPS || (maxY - minY) < IRIT_EPS) {
+        IritFree(Pts2d);
         return NULL;
     }
 
     /* 5. Uniform scale: fit silhouette into 90% of FoamWidth x FoamHeight. */
-    scaleX = (Params -> FoamWidth * 0.9) / (maxx - minx);
-    scaleZ = (Params -> FoamHeight * 0.9) / (maxy - miny);
-    scale = IRIT_MIN(scaleX, scaleZ);
-    cx = 0.5 * (minx + maxx);
-    cy = 0.5 * (miny + maxy);
+    scaleX = (Params -> FoamWidth * 0.9) / (maxX - minX);
+    scaleZ = (Params -> FoamHeight * 0.9) / (maxY - minY);
+    Scale = IRIT_MIN(scaleX, scaleZ);
+    Cx = 0.5 * (minX + maxX);
+    Cy = 0.5 * (minY + maxY);
 
     /* 6. Validate the view is horizontally cuttable.			    */
     /*									    */
@@ -1516,7 +1516,7 @@ static IritPrsrObjectStruct *HWCBuildSilhouetteRuledSrf(
     IrtRType wxyLen = sqrt(wVec[0] * wVec[0] + wVec[1] * wVec[1]);
 
     if (wxyLen < 0.1) {
-        IritFree(pts2d);
+        IritFree(Pts2d);
         return NULL;
     }
 
@@ -1535,9 +1535,9 @@ static IritPrsrObjectStruct *HWCBuildSilhouetteRuledSrf(
         int b,
             *isBoundary = (int*) IritMalloc(sizeof(int) * n);
         IrtRType 
-            diag = sqrt((maxx - minx) * (maxx - minx) +
-			(maxy - miny) * (maxy - miny)),
-            distThresh = diag * 0.005;   /* 0.5% of diagonal as tolerance. */
+            Diag = sqrt((maxX - minX) * (maxX - minX) +
+			(maxY - minY) * (maxY - minY)),
+            distThresh = Diag * 0.005;   /* 0.5% of diagonal as tolerance. */
 
         for (k = 0; k < n; ++k) {
             isBoundary[k] = 0;
@@ -1554,7 +1554,7 @@ static IritPrsrObjectStruct *HWCBuildSilhouetteRuledSrf(
                 projP2[1] = boundaryEdges[b].Pt2[0] * vVec[0] + boundaryEdges[b].Pt2[1]
                     * vVec[1] + boundaryEdges[b].Pt2[2] * vVec[2];
 
-                if (HWCDistPointSegment2D(pts2d[k], projP1, projP2) < distThresh) {
+                if (HWCDistPointSegment2D(Pts2d[k], projP1, projP2) < distThresh) {
                     isBoundary[k] = 1;
                     break;
                 }
@@ -1565,19 +1565,19 @@ static IritPrsrObjectStruct *HWCBuildSilhouetteRuledSrf(
         /* Find the longest contiguous sequence of isBoundary == 0 (wrapping around). */
         for (k = 0; k < n; ++k) {
             if (isBoundary[k] == 0) {
-                int len = 0;
-                int idx = k;
-                while (len < n && isBoundary[idx] == 0) {
-                    len++;
-                    idx = (idx + 1) % n;
+                int Len = 0;
+                int iDx = k;
+                while (Len < n && isBoundary[iDx] == 0) {
+                    Len++;
+                    iDx = (iDx + 1) % n;
                 }
-                if (len > bestLen) {
-                    bestLen = len;
+                if (Len > bestLen) {
+                    bestLen = Len;
                     bestStart = k;
                 }
                 /* Fast forward k to the end of this non-boundary sequence. */
                 /* But only up to n-1 to avoid infinite loops if the whole thing wraps. */
-                k += len - 1;
+                k += Len - 1;
             }
         }
 
@@ -1591,65 +1591,65 @@ static IritPrsrObjectStruct *HWCBuildSilhouetteRuledSrf(
     else {
         /* Fallback if no boundary edges found: remove bottom 10%. */
         IrtRType
-            bottomThresh = miny + (maxy - miny) * 0.10,
-            minXBottom = maxx + 1.0,
-            maxXBottom = minx - 1.0;
-        int leftIdx = -1,
-            rightIdx = -1;
+            bottomThresh = minY + (maxY - minY) * 0.10,
+            minXBottom = maxX + 1.0,
+            maxXBottom = minX - 1.0;
+        int leftIDx = -1,
+            rightIDx = -1;
 
         for (k = 0; k < n; ++k) {
-            if (pts2d[k][1] <= bottomThresh) {
-                if (pts2d[k][0] < minXBottom) {
-                    minXBottom = pts2d[k][0];
-                    leftIdx = k;
+            if (Pts2d[k][1] <= bottomThresh) {
+                if (Pts2d[k][0] < minXBottom) {
+                    minXBottom = Pts2d[k][0];
+                    leftIDx = k;
                 }
-                if (pts2d[k][0] > maxXBottom) {
-                    maxXBottom = pts2d[k][0];
-                    rightIdx = k;
+                if (Pts2d[k][0] > maxXBottom) {
+                    maxXBottom = Pts2d[k][0];
+                    rightIDx = k;
                 }
             }
         }
 
-        if (leftIdx != -1 && rightIdx != -1 && leftIdx != rightIdx &&
-            (maxXBottom - minXBottom) > (maxx - minx) * 0.10) {
+        if (leftIDx != -1 && rightIDx != -1 && leftIDx != rightIDx &&
+            (maxXBottom - minXBottom) > (maxX - minX) * 0.10) {
 
             /* Path 1: leftIdx to rightIdx (incrementing). */
             IrtRType 
-                maxYPath1 = miny;
-            int len1 = (rightIdx - leftIdx + n) % n;
-            for (k = 0; k <= len1; ++k) {
-                int idx = (leftIdx + k) % n;
-                if (pts2d[idx][1] > maxYPath1) 
-                    maxYPath1 = pts2d[idx][1];
+                maxYPath1 = minY;
+            int Len1 = (rightIDx - leftIDx + n) % n;
+            for (k = 0; k <= Len1; ++k) {
+                int iDx = (leftIDx + k) % n;
+                if (Pts2d[iDx][1] > maxYPath1) 
+                    maxYPath1 = Pts2d[iDx][1];
             }
 
             /* Path 2: rightIdx to leftIdx (incrementing). */
             IrtRType 
-                maxYPath2 = miny;
-            int len2 = (leftIdx - rightIdx + n) % n;
-            for (k = 0; k <= len2; ++k) {
-                int idx = (rightIdx + k) % n;
-                if (pts2d[idx][1] > maxYPath2) 
-                    maxYPath2 = pts2d[idx][1];
+                maxYPath2 = minY;
+            int Len2 = (leftIDx - rightIDx + n) % n;
+            for (k = 0; k <= Len2; ++k) {
+                int iDx = (rightIDx + k) % n;
+                if (Pts2d[iDx][1] > maxYPath2) 
+                    maxYPath2 = Pts2d[iDx][1];
             }
 
             if (maxYPath1 > maxYPath2) {
-                topStart = leftIdx;
-                topLen = len1 + 1;
+                topStart = leftIDx;
+                topLen = Len1 + 1;
             }
             else {
-                topStart = rightIdx;
-                topLen = len2 + 1;
+                topStart = rightIDx;
+                topLen = Len2 + 1;
             }
         }
     }
 
     /* Extract the top path. */
     IrtPtType 
-        *top_pts = (IrtPtType*) IritMalloc(sizeof(IrtPtType) * topLen);
+        *top_Pts = (IrtPtType*) IritMalloc(sizeof(IrtPtType) * topLen);
 
     for (k = 0; k < topLen; ++k) {
-        IRIT_PT_COPY(top_pts[k], pts2d[(topStart + k) % n]);
+        IRIT_PT_COPY(top_Pts[k], Pts2d[(topStart + k) % n]);
     }
 
     /* 8. Build silhouette curve mapped exactly into 3D World space.
@@ -1661,21 +1661,21 @@ static IritPrsrObjectStruct *HWCBuildSilhouetteRuledSrf(
      *    We also shift the entire cut upwards to be centered in the foam block. */
     Crv = IritCagdBspCrvNew(topLen, 2, IRIT_CAGD_PT_E3_TYPE);
     if (Crv == NULL) {
-        IritFree(pts2d);
-        IritFree(top_pts);
+        IritFree(Pts2d);
+        IritFree(top_Pts);
         return NULL;
     }
 
     for (k = 0; k < topLen; ++k) {
         IrtRType 
-            sx = (top_pts[k][0] - cx) * scale,
-            sy = (top_pts[k][1] - cy) * scale;
+            Sx = (top_Pts[k][0] - Cx) * Scale,
+            Sy = (top_Pts[k][1] - Cy) * Scale;
 
         /* Map back to 3D world coordinates. */
         IrtRType 
-            wx = sx * uVec[0] + sy * vVec[0],
-            wy = sx * uVec[1] + sy * vVec[1],
-            wz = sx * uVec[2] + sy * vVec[2];
+            Wx = Sx * uVec[0] + Sy * vVec[0],
+            Wy = Sx * uVec[1] + Sy * vVec[1],
+            Wz = Sx * uVec[2] + Sy * vVec[2];
 
         /* To bypass a critical math bug in the legacy hot_wire_cut.c logic,
          * we must pre-extrapolate the Z-coordinate. The legacy code computes:
@@ -1689,19 +1689,19 @@ static IritPrsrObjectStruct *HWCBuildSilhouetteRuledSrf(
          * After substituting Crv2_Y_rot = -wz * slope + wxyLen * FoamDepth / 2, we get:
          */
         IrtRType 
-            slope = wVec[2] / wxyLen,
-            zShift = slope * (195.0 - wxyLen * Params -> FoamDepth) +
-            2.0 * wz * slope * slope;
+            Slope = wVec[2] / wxyLen,
+            ZShift = Slope * (195.0 - wxyLen * Params -> FoamDepth) +
+            2.0 * Wz * Slope * Slope;
 
-        Crv -> Points[1][k] = wx - wVec[0] * Params -> FoamDepth * 0.5;
-        Crv -> Points[2][k] = wy - wVec[1] * Params -> FoamDepth * 0.5;
-        Crv -> Points[3][k] = wz - wVec[2] * Params -> FoamDepth * 0.5 +
-            Params -> FoamHeight * 0.5 + zShift;
+        Crv -> Points[1][k] = Wx - wVec[0] * Params -> FoamDepth * 0.5;
+        Crv -> Points[2][k] = Wy - wVec[1] * Params -> FoamDepth * 0.5;
+        Crv -> Points[3][k] = Wz - wVec[2] * Params -> FoamDepth * 0.5 +
+            Params -> FoamHeight * 0.5 + ZShift;
     }
     IritCagdBspKnotUniformOpen(topLen, 2, Crv -> KnotVector);
 
-    IritFree(pts2d);
-    IritFree(top_pts);
+    IritFree(Pts2d);
+    IritFree(top_Pts);
 
     /* 8. Extrude exactly along the true 3D view direction by FoamDepth.
      *    This creates a cylinder (surface) whose rulings are exactly wVec.
@@ -1745,8 +1745,8 @@ static void HWCCombineGCodeFiles(const char *const *GcodeFiles,
                                  const IritPrsrHWCDataStruct *Params)
 {
 #define IRIT_MAX_LINE_LEN 512
-    FILE *fout, *fin;
-    int fi,
+    FILE *Fout, *Fin;
+    int Fi,
         f = 300,
         safeEntryLinesToModify = 0;
     double
@@ -1759,43 +1759,43 @@ static void HWCCombineGCodeFiles(const char *const *GcodeFiles,
         b = 0.0,
         minZSeen = 99999.0,
         ExtraSafeZClearance = 150.0;
-    char line[IRIT_MAX_LINE_LEN];
+    char Line[IRIT_MAX_LINE_LEN];
 
-    fout = fopen(OutPath, "w");
-    if (fout == NULL) {
+    Fout = fopen(OutPath, "w");
+    if (Fout == NULL) {
         fprintf(stderr, "HWCCombineGCodeFiles: cannot open '%s'.\n", OutPath);
         return;
     }
 #ifdef DEBUG_HOT_WIRE_CUT_ALG2
-    fprintf(fout, "; Combined GCode - %d views\n\n", NumFiles);
+    fprintf(Fout, "; Combined GCode - %d views\n\n", NumFiles);
 #endif /* DEBUG_HOT_WIRE_CUT_ALG2 */
 
-    for (fi = 0; fi < NumFiles; ++fi) {
+    for (Fi = 0; Fi < NumFiles; ++Fi) {
         lastB = bOffset;
 
-        fin = fopen(GcodeFiles[fi], "r");
-        if (fin == NULL) {
+        Fin = fopen(GcodeFiles[Fi], "r");
+        if (Fin == NULL) {
             fprintf(stderr, "HWCCombineGCodeFiles: cannot open '%s'.\n",
-                GcodeFiles[fi]);
+                GcodeFiles[Fi]);
             continue;
         }
 #ifdef DEBUG_HOT_WIRE_CUT_ALG2
-        fprintf(fout, "; === View %d start ===\n", fi);
+        fprintf(Fout, "; === View %d start ===\n", Fi);
 #endif /* DEBUG_HOT_WIRE_CUT_ALG2 */
 
-        while (fgets(line, sizeof(line), fin) != NULL) {
-            if (strncmp(line, ";Performing safe entry movement", 31) == 0) {
+        while (fgets(Line, sizeof(Line), Fin) != NULL) {
+            if (strncmp(Line, ";Performing safe entry movement", 31) == 0) {
                 safeEntryLinesToModify = 2;
             }
 
-            if (strncmp(line, "; Performing vertical safe lift to safe Z height.", 49) == 0) {
+            if (strncmp(Line, "; Performing vertical safe lift to safe Z height.", 49) == 0) {
                 safeEntryLinesToModify = 1;
             }
 
-            if (strncmp(line, "G1 ", 3) == 0 &&
-                strstr(line, "B") != NULL &&
-                strstr(line, "X") != NULL) {
-                if (sscanf(line, "G1 X%lf Y%lf Z%lf A%lf B%lf F%d",
+            if (strncmp(Line, "G1 ", 3) == 0 &&
+                strstr(Line, "B") != NULL &&
+                strstr(Line, "X") != NULL) {
+                if (sscanf(Line, "G1 X%lf Y%lf Z%lf A%lf B%lf F%d",
                     &x, &y, &z, &a, &b, &f) == 6) {
                     /* B from the per-view GCode is the ABSOLUTE rotation
                        angle for this view (each view resets _TotalFoamRotation
@@ -1803,12 +1803,12 @@ static void HWCCombineGCodeFiles(const char *const *GcodeFiles,
                        making the machine accumulate extra full rotations.
                        Instead, compute the shortest angular path. */
                     {
-                        IrtRType diff = fmod(b - lastB, 360.0);
-                        if (diff > 180.0) 
-                            diff -= 360.0;
-                        if (diff < -180.0) 
-                            diff += 360.0;
-                        lastB = lastB + diff;
+                        IrtRType Diff = fmod(b - lastB, 360.0);
+                        if (Diff > 180.0) 
+                            Diff -= 360.0;
+                        if (Diff < -180.0) 
+                            Diff += 360.0;
+                        lastB = lastB + Diff;
                     }
                     if (z < minZSeen) 
                         minZSeen = z;
@@ -1825,7 +1825,7 @@ static void HWCCombineGCodeFiles(const char *const *GcodeFiles,
                         safeEntryLinesToModify--;
                     }
 
-                    fprintf(fout,
+                    fprintf(Fout,
                         "G1 X%.3f Y%.3f Z%.3f A%.3f B%.3f F%d\n",
                         x, y, z, a, lastB, f);
                     continue;
@@ -1833,56 +1833,56 @@ static void HWCCombineGCodeFiles(const char *const *GcodeFiles,
             }
             /* Skip per-view Go Home commands; the combined file
                emits its own G28 at the very end. */
-            if (strncmp(line, "G28", 3) == 0)
+            if (strncmp(Line, "G28", 3) == 0)
                 continue;
-            fputs(line, fout);
+            fputs(Line, Fout);
         }
 
-        fclose(fin);
+        fclose(Fin);
         bOffset = lastB;
 #ifdef DEBUG_HOT_WIRE_CUT_ALG2
-        fprintf(fout, "; === View %d end ===\n\n", fi);
+        fprintf(Fout, "; === View %d end ===\n\n", Fi);
 #endif /* DEBUG_HOT_WIRE_CUT_ALG2 */
     }
 
     if (Params != NULL) {
-        fprintf(fout, "\n; === Slice off base ===\n");
+        fprintf(Fout, "\n; === Slice off base ===\n");
         /* Move safely above the foam. */
         z = Params -> FoamHeight + ExtraSafeZClearance;
         a = Params -> FoamHeight + ExtraSafeZClearance;
-        fprintf(fout, "G1 X%.3f Y%.3f Z%.3f A%.3f B%.3f F300\n", x, y, z, a, lastB);
+        fprintf(Fout, "G1 X%.3f Y%.3f Z%.3f A%.3f B%.3f F300\n", x, y, z, a, lastB);
         /* Move to the starting side of the machine (safely clear of foam). */
         x = 20.0;
         y = 20.0;
-        fprintf(fout, "G1 X%.3f Y%.3f Z%.3f A%.3f B%.3f F300\n", x, y, z, a, lastB);
+        fprintf(Fout, "G1 X%.3f Y%.3f Z%.3f A%.3f B%.3f F300\n", x, y, z, a, lastB);
         /* Drop down to the slice height (1mm below the lowest point of the object). */
         z = minZSeen - 1.0;
         if (z < Params -> MinimalHeight) 
             z = Params -> MinimalHeight;
         a = z;
-        fprintf(fout, "G1 X%.3f Y%.3f Z%.3f A%.3f B%.3f F150\n", x, y, z, a, lastB);
+        fprintf(Fout, "G1 X%.3f Y%.3f Z%.3f A%.3f B%.3f F150\n", x, y, z, a, lastB);
         /* Slice entirely through the foam to the other side. */
         x = 450.0;
         y = 450.0;
-        fprintf(fout, "G1 X%.3f Y%.3f Z%.3f A%.3f B%.3f F150\n", x, y, z, a, lastB);
+        fprintf(Fout, "G1 X%.3f Y%.3f Z%.3f A%.3f B%.3f F150\n", x, y, z, a, lastB);
         /* Pull back up to safe height. */
         z = Params -> FoamHeight + ExtraSafeZClearance;
         a = Params -> FoamHeight + ExtraSafeZClearance;
-        fprintf(fout, "G1 X%.3f Y%.3f Z%.3f A%.3f B%.3f F300\n", x, y, z, a, lastB);
+        fprintf(Fout, "G1 X%.3f Y%.3f Z%.3f A%.3f B%.3f F300\n", x, y, z, a, lastB);
     }
 
-    fprintf(fout, "\n; === Return Home Synchronously ===\n");
+    fprintf(Fout, "\n; === Return Home Synchronously ===\n");
     if (Params != NULL) {
         /* Move XY and B to 0 while maintaining the high Z clearance to avoid collisions. */
-        fprintf(fout, "G1 X0.000 Y0.000 Z%.3f A%.3f B0.000 F300\n", z, a);
+        fprintf(Fout, "G1 X0.000 Y0.000 Z%.3f A%.3f B0.000 F300\n", z, a);
     }
     /* Finally drop Z back to 0 synchronously to avoid snapping the wire. */
-    fprintf(fout, "G1 X0.000 Y0.000 Z0.000 A0.000 B0.000 F300\n");
+    fprintf(Fout, "G1 X0.000 Y0.000 Z0.000 A0.000 B0.000 F300\n");
 
     /* Emit G28 only to ensure firmware resets coordinate systems if necessary,
        but since we are already at 0,0,0,0,0 it won't physically move sequentially. */
-    fprintf(fout, "G28; Go Home\n");
-    fclose(fout);
+    fprintf(Fout, "G28; Go Home\n");
+    fclose(Fout);
 #ifdef DEBUG_HOT_WIRE_CUT_ALG2
     printf("Combined GCode written to: %s\n", OutPath);
 #endif // DEBUG_HOT_WIRE_CUT_ALG2
@@ -1963,9 +1963,9 @@ IrtRType HWCGenerateGCodeFromObj(IritPrsrObjectStruct *RawModel,
     IritPrsrHWCDataStruct 
         HWCParams;
     char **gcodeFiles, gcodeFile[512], contourFile[512];
-    int vi, i,
+    int Vi, i,
         gcodeCount = 0,
-        result = 0;
+        Result = 0;
 
     if (RawModel == NULL || OutputGCodePath == NULL || NumViews <= 0) {
         fprintf(stderr,
@@ -2069,29 +2069,29 @@ IrtRType HWCGenerateGCodeFromObj(IritPrsrObjectStruct *RawModel,
     }
 
     /* 5. Per-view: contour -> ruled surface -> GCode. */
-    for (vi = 0; vi < NumViews; ++vi) {
+    for (Vi = 0; Vi < NumViews; ++Vi) {
         Contour = NULL;
         RuledSrf = NULL;
         SimObj = NULL;
 
         /* 5a. Approximate silhouette contour. */
 #ifdef DEBUG_HOT_WIRE_CUT_ALG2
-        printf("  View %d: Computing silhouette contour...\n", vi);
+        printf("  View %d: Computing silhouette contour...\n", Vi);
         fflush(stdout);
 #endif /* DEBUG_HOT_WIRE_CUT_ALG2 */
 
         Contour = HWCIritPrsrApproxBSplineContourFromSolidView(Solid,
-                                                                Views[vi], 128);
+                                                                Views[Vi], 128);
 
         if (Contour == NULL) {
-            printf("View %d: contour approximation failed, skipping.\n", vi);
+            printf("View %d: contour approximation failed, skipping.\n", Vi);
             continue;
         }
 
         /* Save the raw 2D contour polygon for inspection. */
 #ifdef DEBUG_HOT_WIRE_CUT_ALG2
-        snprintf(contourFile, sizeof(contourFile),
-            "contour_view%d.obj", vi);
+        sprint(contourFile, sizeof(contourFile),
+            "contour_view%d.obj", Vi);
         fflush(stdout);
         if (!IritPrsrOBJSaveFile(Contour, contourFile, FALSE, 0, 0))
             fprintf(stderr, "Failed saving %s.\n", contourFile);
@@ -2101,27 +2101,27 @@ IrtRType HWCGenerateGCodeFromObj(IritPrsrObjectStruct *RawModel,
 
         /* 5b. Build ruled surface. */
 #ifdef DEBUG_HOT_WIRE_CUT_ALG2
-        printf("  View %d: Building ruled surface...\n", vi);
+        printf("  View %d: Building ruled surface...\n", Vi);
         fflush(stdout);
 #endif /* DEBUG_HOT_WIRE_CUT_ALG2 */
-        RuledSrf = HWCBuildSilhouetteRuledSrf(Contour, Solid, Views[vi],
+        RuledSrf = HWCBuildSilhouetteRuledSrf(Contour, Solid, Views[Vi],
                                                  &HWCParams);
         IritPrsrFreeObject(Contour);
         Contour = NULL;
 
         if (RuledSrf == NULL) {
             printf("View %d: failed to build ruled surface, skipping.\n",
-                vi);
+                Vi);
             continue;
         }
 
         /* 5c. Generate GCode for this view. */
 #ifdef DEBUG_HOT_WIRE_CUT_ALG2
-        printf("  View %d: Generating GCode...\n", vi);
+        printf("  View %d: Generating GCode...\n", Vi);
         fflush(stdout);
 #endif
-        snprintf(gcodeFile, sizeof(gcodeFile),
-            "view%d_silhouette.gcode", vi);
+        sprint(gcodeFile, sizeof(gcodeFile),
+            "view%d_silhouette.gcode", Vi);
 
         SimObj = IritPrsrHWCCreatePath(RuledSrf, NULL, NULL, gcodeFile,
                                                 &HWCParams);
@@ -2130,7 +2130,7 @@ IrtRType HWCGenerateGCodeFromObj(IritPrsrObjectStruct *RawModel,
 
         if (SimObj != NULL) {
 #ifdef DEBUG_HOT_WIRE_CUT_ALG2
-            printf("View %d: GCode written to %s\n", vi, gcodeFile);
+            printf("View %d: GCode written to %s\n", Vi, gcodeFile);
 #endif /* DEBUG_HOT_WIRE_CUT_ALG2 */
 
             /* Append to AllSimObjs to combine all paths. */
@@ -2143,7 +2143,7 @@ IrtRType HWCGenerateGCodeFromObj(IritPrsrObjectStruct *RawModel,
         }
         else {
             printf("View %d: IritPrsrHWCCreatePath failed, skipping.\n",
-                vi);
+                Vi);
         }
     }
 
@@ -2155,11 +2155,11 @@ IrtRType HWCGenerateGCodeFromObj(IritPrsrObjectStruct *RawModel,
 #endif /* DEBUG_HOT_WIRE_CUT_ALG2 */
         HWCCombineGCodeFiles((const char *const *)gcodeFiles, gcodeCount,
             OutputGCodePath, &HWCParams);
-        result = 1;
+        Result = 1;
     }
     else {
         fprintf(stderr, "No per-view GCode was produced.\n");
-        result = 0;
+        Result = 0;
     }
 
     /* Save all combined paths to a single ITD file. */
@@ -2192,7 +2192,7 @@ IrtRType HWCGenerateGCodeFromObj(IritPrsrObjectStruct *RawModel,
     }
 
 
-    return result;
+    return Result;
 }
 
 
