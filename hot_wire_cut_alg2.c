@@ -346,34 +346,37 @@ static IrtRType HWCCalcPolygonArea(IritPrsrObjectStruct *PObj)
 * HWCIritPrsrBuildViewBasisFromMat (constructs MatLocal).                    *
 *****************************************************************************/
 static IritPrsrObjectStruct *HWCBuildProjectUnionLocal(
-                                                  IritPrsrObjectStruct *Solid,
-						  IrtHmgnMatType MatLocal)
+                                                IritPrsrObjectStruct *Solid,
+						                        IrtHmgnMatType MatLocal)
 {
     IrtRType Dx, Dy, Margin,
         minX = IRIT_INFNTY,
         minY = IRIT_INFNTY,
         maxX = -IRIT_INFNTY,
         maxY = -IRIT_INFNTY;
+    IritPrsrObjectStruct *PolyObj, *OutList;
     unsigned char *Grid;
-    int *Px, *Py, *Ints, x, y, i, j,
+    int *Px, *Py, *Ints, x, y, i, j, Guard, pMinY, pMinX, nPts, PxVal, PyVal,
+        jIdx, Y1, Y2, X1, X2, a, b, Count, xStart, xEnd, xVal, xDx[8], xDy[8], 
+        maxPath, pathLen, Cx, Cy, firstStep, Dir, *pathX, *pathY, nextDir, Found,
+        Nx, Ny, iPath,
         startX = -1,
         startY = -1;
-    IritPrsrPolygonStruct *Pl;
+    IritPrsrPolygonStruct *Pl, *NewPl;
+    IritPrsrVertexStruct *Cur, *V, *FisrtV, *PrevV, *NV;
+    IrtPtType localP;
 
     if (Solid == NULL || !IRIT_PRSR_IS_POLY_OBJ(Solid))
         return NULL;
 
     /* 1. Project points to local XY, collect them to compute bounding box. */
     for (Pl = Solid -> U.Pl; Pl != NULL; Pl = Pl -> Pnext) {
-        IritPrsrVertexStruct *Cur,
-            * V = Pl->PVertex;
-        int Guard = 0;
-
+        *V = Pl->PVertex;
+        Guard = 0;
         if (V == NULL)
             continue;
         Cur = V;
         do {
-            IrtPtType localP;
 
             IritMiscMatMultPtby4by4(localP, Cur->Coord, MatLocal);
             if (localP[0] < minX)
@@ -418,20 +421,15 @@ static IritPrsrObjectStruct *HWCBuildProjectUnionLocal(
 
     /* 3. Scanline fill each projected polygon. */
     for (Pl = Solid -> U.Pl; Pl != NULL; Pl = Pl -> Pnext) {
-        IritPrsrVertexStruct *Cur,
-            *V = Pl -> PVertex;
-        int pminY, pmaxY,
-            nPts = 0,
-            Guard = 0;
+        *V = Pl -> PVertex;
+        nPts = 0;
+        Guard = 0;
 
         if (V == NULL)
             continue;
 
         Cur = V;
         do {
-            IrtPtType localP;
-            int PxVal, PyVal;
-
             IritMiscMatMultPtby4by4(localP, Cur -> Coord, MatLocal);
 
             PxVal = (int) ((localP[0] - minX) / Dx * (HWCSIL_GRID_RES - 1));
@@ -459,40 +457,39 @@ static IritPrsrObjectStruct *HWCBuildProjectUnionLocal(
             continue;
 
         /* Scanline logic */
-        pminY = HWCSIL_GRID_RES;
-        pmaxY = -1;
+        pMinY = HWCSIL_GRID_RES;
+        pMaxY = -1;
         for (i = 0; i < nPts; ++i) {
-            if (Py[i] < pminY)
-                pminY = Py[i];
-            if (Py[i] > pmaxY)
-                pmaxY = Py[i];
+            if (Py[i] < pMinY)
+                pMinY = Py[i];
+            if (Py[i] > pMaxY)
+                pMaxY = Py[i];
         }
 
-        for (y = pminY; y <= pmaxY; ++y) {
-            int a, b,
-                count = 0;
+        for (y = pMinY; y <= pMaxY; ++y) {
+            Count = 0;
 
             for (i = 0; i < nPts; ++i) {
-                int jIDx = (i + 1) % nPts,
-                    y1 = Py[i],
-                    y2 = Py[jIDx],
-                    x1 = Px[i],
-                    x2 = Px[jIDx];
+                jIdx = (i + 1) % nPts;
+                Y1 = Py[i];
+                Y2 = Py[jIIdx];
+                X1 = Px[i];
+                X2 = Px[jIdx];
 
-                if (y1 == y2)
+                if (Y1 == Y2)
                     continue;
 
-                if ((y1 <= y && y < y2) || (y2 <= y && y < y1)) {
-                    int xInt = x1 + (y - y1) * (x2 - x1) / (y2 - y1);
-                    if (count < 4096) {
-                        Ints[count++] = xInt;
+                if ((Y1 <= y && y < Y2) || (Y2 <= y && y < Y1)) {
+                    int xInt = X1 + (y - Y1) * (X2 - X1) / (Y2 - Y1);
+                    if (Count < 4096) {
+                        Ints[Count++] = xInt;
                     }
                 }
             }
 
             /* Sort intersections. */
-            for (a = 0; a < count - 1; ++a) {
-                for (b = a + 1; b < count; ++b) {
+            for (a = 0; a < Count - 1; ++a) {
+                for (b = a + 1; b < Count; ++b) {
                     if (Ints[a] > Ints[b]) {
                         int tmp = Ints[a];
 
@@ -503,11 +500,10 @@ static IritPrsrObjectStruct *HWCBuildProjectUnionLocal(
             }
 
             /* Fill pairs. */
-            for (a = 0; a < count; a += 2) {
-                if (a + 1 < count) {
-                    int xStart = Ints[a];
-                    int xEnd = Ints[a + 1];
-                    int xVal;
+            for (a = 0; a < Count; a += 2) {
+                if (a + 1 < Count) {
+                    xStart = Ints[a];
+                    xEnd = Ints[a + 1];
 
                     if (xStart < 0)
                         xStart = 0;
@@ -544,20 +540,19 @@ static IritPrsrObjectStruct *HWCBuildProjectUnionLocal(
 
     /* 5. Moore Neighborhood Tracing. */
     {
-        int xDx[8] = { 0, 1, 1, 1, 0, -1, -1, -1 },
-            xDy[8] = { -1, -1, 0, 1, 1, 1, 0, -1 },
-            maxPath = HWCSIL_GRID_RES * HWCSIL_GRID_RES,
-            pathLen = 0,
-            Cx = startX,
-            Cy = startY,
-            firstStep = 1,
-            Dir = 2,   /* Pretend we moved East (2), so left is North (0). */
-            *pathX = (int*) IritMalloc(sizeof(int) * maxPath),
-            *pathY = (int*) IritMalloc(sizeof(int) * maxPath);
+        xDx[8] = { 0, 1, 1, 1, 0, -1, -1, -1 };
+        xDy[8] = { -1, -1, 0, 1, 1, 1, 0, -1 };
+        maxPath = HWCSIL_GRID_RES * HWCSIL_GRID_RES;
+        pathLen = 0;
+        Cx = startX;
+        Cy = startY;
+        firstStep = 1;
+        Dir = 2;   /* Pretend we moved East (2), so left is North (0). */
+        *pathX = (int*) IritMalloc(sizeof(int) * maxPath);
+        *pathY = (int*) IritMalloc(sizeof(int) * maxPath);
 
         do {
-            int nextDir, i,
-                Found = 0;
+            Found = 0;
 
             if (pathLen < maxPath) {
                 pathX[pathLen] = Cx;
@@ -567,8 +562,6 @@ static IritPrsrObjectStruct *HWCBuildProjectUnionLocal(
             else break;
 
             for (i = 0; i < 8; ++i) {
-                int Nx, Ny; 
-
                 /* Turn 135 deg left to ensure we trace outside boundary. */
                 nextDir = (Dir + 5 + i) % 8;
                 Nx = Cx + xDx[nextDir];
@@ -605,18 +598,12 @@ static IritPrsrObjectStruct *HWCBuildProjectUnionLocal(
 
         /* 6. Convert traced pixel path back to view-local XY. */
         {
-            IritPrsrPolygonStruct
-                *NewPl = IritPrsrAllocPolygon(0, NULL, NULL);
-            IritPrsrVertexStruct
-                *FirstV = NULL,
-                *PrevV = NULL;
-            int iPath;
-            IritPrsrObjectStruct *PolyObj,
-                *OutList;
+            *NewPl = IritPrsrAllocPolygon(0, NULL, NULL);
+            *FirstV = NULL,
+            *PrevV = NULL;
 
             for (iPath = 0; iPath < pathLen; ++iPath) {
-                IritPrsrVertexStruct
-                    *NV = IritPrsrAllocVertex2(NULL);
+                *NV = IritPrsrAllocVertex2(NULL);
 
                 NV -> Coord[0] = minX +
 		                 pathX[iPath] * Dx / (HWCSIL_GRID_RES - 1);
@@ -673,7 +660,7 @@ static IritPrsrObjectStruct *HWCBuildProjectUnionLocal(
 * Algorithm:                                                                 *
 * 1: Extracts orthonormal basis (u, v, w) from view matrix.                  *
 * 2: Builds view-local transformation mapping world to local XY plane.       *
-* 3: Rasterizes solid into 1024×1024 grid, extracts boundary via Moore   *
+* 3: Rasterizes solid into 1024×1024 grid, extracts boundary via Moore       *
 *    neighborhood tracing, producing high-resolution pixel-level contour.    *
 * 4: Applies Laplacian smoothing to remove pixel stair-stepping artifacts.   *
 * 5: Subsamples points to requested count (NumCtrl).                         *
@@ -720,11 +707,11 @@ static IritPrsrObjectStruct *HWCIritPrsrApproxBSplineContourFromSolidView(
     IrtHmgnMatType MatLocal, InvMat;
     IritPrsrObjectStruct *UnionLocal, *Poly, *FinalObj;
     IritPrsrPolygonStruct *Pl, *FinalPl;
-    IritPrsrVertexStruct *V, *Cur,
+    IritPrsrVertexStruct *V, *Cur, *NV,
         *FirstV = NULL,
         *PrevV = NULL;
-    IrtPtType *Pts, *tmpPts;
-    int i, It, Step,
+    IrtPtType *Pts, *tmpPts, worldP;
+    int i, It, Step, Im1, Ip1,
         nPts = 0,
         smoothIters = 5;
 
@@ -784,8 +771,8 @@ static IritPrsrObjectStruct *HWCIritPrsrApproxBSplineContourFromSolidView(
     /* Laplacian smoothing to remove pixel stair-stepping artifacts. */
     for (It = 0; It < smoothIters; ++It) {
         for (i = 0; i < nPts; ++i) {
-            int Im1 = (i - 1 + nPts) % nPts,
-                Ip1 = (i + 1) % nPts;
+            Im1 = (i - 1 + nPts) % nPts,
+            Ip1 = (i + 1) % nPts;
 
             tmpPts[i][0] = (Pts[Im1][0] + Pts[Ip1][0] + Pts[i][0]) / 3.0;
             tmpPts[i][1] = (Pts[Im1][1] + Pts[Ip1][1] + Pts[i][1]) / 3.0;
@@ -801,9 +788,6 @@ static IritPrsrObjectStruct *HWCIritPrsrApproxBSplineContourFromSolidView(
     FinalPl = IritPrsrAllocPolygon(0, NULL, NULL);
 
     for (i = 0; i < nPts; i += Step) {
-        IrtPtType worldP;
-        IritPrsrVertexStruct *NV;
-
         IritMiscMatMultPtby4by4(worldP, Pts[i], MatLocal);
         NV = IritPrsrAllocVertex2(NULL);
         NV -> Coord[0] = worldP[0];
@@ -845,7 +829,7 @@ static IritPrsrObjectStruct *HWCIritPrsrApproxBSplineContourFromSolidView(
 *                                                                            *
 * Candidate views are generated uniformly along a circle centered at the     *
 * origin, with camera positions defined by angular parameter theta in        *
-* [0, 2π).                                                               *
+* [0, 2π).                                                                   *
 * For each candidate view, a silhouette contour is computed and scored based *
 * on its projected 2D area. Larger silhouettes are preferred as they         *
 * typically preserve more geometric features during cutting.                 *
@@ -884,9 +868,11 @@ static IrtHmgnMatType *HWCSelectBestViewSampling(IritPrsrObjectStruct *PObj,
                                                  int NumSamples,
                                                  IrtHmgnMatType *ResultMat)
 {
-    int Next, s, i, j, Best;
-    IrtHmgnMatType *ViewMats;
-    IrtRType *Scores;
+    IritPrsrObjectStruct *Contour;
+    IrtVecType CamPos, Center, Up;
+    int Next, s, i, j, Best, RequestedViews, numSelected, isSimilar, isExact;
+    IrtHmgnMatType *ViewMats, tmpMat, *SelectedMats;
+    IrtRType *Scores, Theta, r, wxyLen, tmpScore, fixedAngles[4], Dot;
     const int 
         NumCtrl = 128;
 
@@ -904,10 +890,8 @@ static IrtHmgnMatType *HWCSelectBestViewSampling(IritPrsrObjectStruct *PObj,
 
     /* Generate candidate view matrices (Uniform circle in XY plane). */
     for (s = 0; s < NumSamples; ++s) {
-        IrtRType
-            Theta = 2.0 * 3.14159265358979323846 * s / NumSamples;
-        IrtRType r = 2.0;
-        IrtVecType CamPos, Center, Up;
+        Theta = 2.0 * 3.14159265358979323846 * s / NumSamples;
+        r = 2.0;
 
         CamPos[0] = cos(Theta) * r;
         CamPos[1] = sin(Theta) * r;
@@ -931,9 +915,6 @@ static IrtHmgnMatType *HWCSelectBestViewSampling(IritPrsrObjectStruct *PObj,
     }
 
     for (i = 0; i < NumSamples; ++i) {
-        IritPrsrObjectStruct *Contour;
-        IrtRType wxyLen;
-
         Scores[i] = 0.0;
 
         /* Reject near-vertical views (where wxyLen < 0.1) since the       */
@@ -962,8 +943,7 @@ static IrtHmgnMatType *HWCSelectBestViewSampling(IritPrsrObjectStruct *PObj,
                 Best = j;
         }
         if (Best != i) {
-            IrtHmgnMatType tmpMat;
-            IrtRType tmpScore = Scores[i];
+            tmpScore = Scores[i];
 
             memcpy(tmpMat, ViewMats[i], sizeof(IrtHmgnMatType));
             memcpy(ViewMats[i], ViewMats[Best], sizeof(IrtHmgnMatType));
@@ -977,18 +957,16 @@ static IrtHmgnMatType *HWCSelectBestViewSampling(IritPrsrObjectStruct *PObj,
     /* Build final view list: first 5 are fixed cardinal + diagonal views,  */
     /* then fill remaining slots with best diverse scored views.            */
     {
-        int RequestedViews = NumSamples / 2,
-            numSelected = 0;
-        IrtHmgnMatType
-            *SelectedMats = (IrtHmgnMatType *)
+        RequestedViews = NumSamples / 2,
+        numSelected = 0;
+        *SelectedMats = (IrtHmgnMatType *)
                                IritMalloc(sizeof(IrtHmgnMatType) * NumSamples);
 
         /* 0 = X, 45 deg = diagonal, 90 deg =+Y, 135 deg = other diagonal. */
-        IrtRType fixedAngles[4] = { 0.0, 45.0, 90.0, 135.0 };
+        fixedAngles = { 0.0, 45.0, 90.0, 135.0 };
 
         for (i = 0; i < 4 && numSelected < RequestedViews; ++i) {
-            IrtRType Theta = fixedAngles[i] * 3.14159265358979323846 / 180.0;
-            IrtVecType CamPos, Center, Up;
+            Theta = fixedAngles[i] * 3.14159265358979323846 / 180.0;
 
             CamPos[0] = cos(Theta) * 2.0;
             CamPos[1] = sin(Theta) * 2.0;
@@ -1002,10 +980,10 @@ static IrtHmgnMatType *HWCSelectBestViewSampling(IritPrsrObjectStruct *PObj,
         /* Fill remaining slots with best-scored views that are not too     */
 	/* similar (within 15 degrees) to any already-selected view.	    */
         for (i = 0; i < NumSamples && numSelected < RequestedViews; ++i) {
-            int isSimilar = 0;
+            isSimilar = 0;
 
             for (j = 0; j < numSelected; ++j) {
-                IrtRType Dot =
+                Dot =
                     ViewMats[i][2][0] * SelectedMats[j][2][0] +
                     ViewMats[i][2][1] * SelectedMats[j][2][1] +
                     ViewMats[i][2][2] * SelectedMats[j][2][2];
@@ -1025,13 +1003,13 @@ static IrtHmgnMatType *HWCSelectBestViewSampling(IritPrsrObjectStruct *PObj,
         /* If still not enough, relax the threshold and accept any          */
 	/* non-duplicate view.						    */
         for (i = 0; i < NumSamples && numSelected < RequestedViews; ++i) {
-            int isExact = 0;
+            isExact = 0;
 
             for (j = 0; j < numSelected; ++j) {
-                IrtRType 
-                    Dot = ViewMats[i][2][0] * SelectedMats[j][2][0] +
-                          ViewMats[i][2][1] * SelectedMats[j][2][1] +
-                          ViewMats[i][2][2] * SelectedMats[j][2][2];
+                Dot = 
+                    ViewMats[i][2][0] * SelectedMats[j][2][0] +
+                    ViewMats[i][2][1] * SelectedMats[j][2][1] +
+                    ViewMats[i][2][2] * SelectedMats[j][2][2];
 
                 if (IRIT_FABS(Dot) > 0.999) {
                     isExact = 1;
@@ -1076,8 +1054,9 @@ static IrtHmgnMatType *HWCSelectBestViewSampling(IritPrsrObjectStruct *PObj,
 static IrtHmgnMatType *HWCSelectViewsSampling(int NumSamples)
 {
     int i;
-    IrtRType Step;
+    IrtRType Step, Theta;
     IrtHmgnMatType *ViewMats;
+    IrtVecType CamPos, Center, Up;
 
     if (NumSamples <= 0)
         return NULL;
@@ -1092,9 +1071,7 @@ static IrtHmgnMatType *HWCSelectViewsSampling(int NumSamples)
     Step = 180.0 / NumSamples;
 
     for (i = 0; i < NumSamples; ++i) {
-        IrtRType
 	    Theta = (Step * i) * 3.14159265358979323846 / 180.0;
-        IrtVecType CamPos, Center, Up;
 
         CamPos[0] = cos(Theta) * 2.0;
         CamPos[1] = sin(Theta) * 2.0;
@@ -1115,7 +1092,7 @@ static IrtHmgnMatType *HWCSelectViewsSampling(int NumSamples)
 }
 
 /*****************************************************************************
-* AUXILIARY:								     *
+* AUXILIARY:								                                 *
 * Auxiliary function to find missing boundary edges in an open solid.	     *
 *****************************************************************************/
 static IritPrsrHWCEdgeStruct *HWCFindBoundaryEdges(
@@ -1123,13 +1100,14 @@ static IritPrsrHWCEdgeStruct *HWCFindBoundaryEdges(
 					    int *OutNumEdges)
 {
     int i, j, k, StackTop, CurrentLoopCount, *EdgeCounts, *Visited, *Stack,
-        *CurrentLoopIndices,
+        MatchFwd, MatchRev, *CurrentLoopIndices, Curr, Match11, Match12, 
+        Match21, Match22, Ei,
         MaxEdges = 0,
         NumEdges = 0,
         NumRawBoundaryEdges = 0,
         BestLoopCount = 0;
     IrtRType 
-        CurrentLoopLength, CurrentLoopAvgZ,
+        CurrentLoopLength, CurrentLoopAvgZ, Len,
         BestLoopLength = -1.0,
         BestLoopAvgZ = IRIT_INFNTY,
         EPS = 1e-4;
@@ -1183,8 +1161,8 @@ static IritPrsrHWCEdgeStruct *HWCFindBoundaryEdges(
             continue;
 
         for (j = i + 1; j < NumEdges; j++) {
-            int MatchFwd = 1,
-                MatchRev = 1;
+            MatchFwd = 1,
+            MatchRev = 1;
 
             if (EdgeCounts[j] == 0)
                 continue;
@@ -1243,8 +1221,7 @@ static IritPrsrHWCEdgeStruct *HWCFindBoundaryEdges(
         Visited[i] = 1;
 
         while (StackTop > 0) {
-            int Curr = Stack[--StackTop];
-            IrtRType Len;
+            Curr = Stack[--StackTop];
 
             CurrentLoopIndices[CurrentLoopCount++] = Curr;
             Len = sqrt(IRIT_SQR(RawBoundaryEdges[Curr].Pt1[0] -
@@ -1256,10 +1233,10 @@ static IritPrsrHWCEdgeStruct *HWCFindBoundaryEdges(
             CurrentLoopLength += Len;
 
             for (j = 0; j < NumRawBoundaryEdges; j++) {
-                int Match11 = 1,
-		    Match12 = 1,
-		    Match21 = 1,
-		    Match22 = 1;
+                Match11 = 1,
+                Match12 = 1,
+                Match21 = 1,
+                Match22 = 1;
 
                 if (Visited[j])
                     continue;
@@ -1289,7 +1266,7 @@ static IritPrsrHWCEdgeStruct *HWCFindBoundaryEdges(
         /* Compute average Z of this loop's edge midpoints. */
         CurrentLoopAvgZ = 0.0;
         for (j = 0; j < CurrentLoopCount; j++) {
-            int Ei = CurrentLoopIndices[j];
+            Ei = CurrentLoopIndices[j];
 
             CurrentLoopAvgZ += (RawBoundaryEdges[Ei].Pt1[2] +
                                 RawBoundaryEdges[Ei].Pt2[2]) * 0.5;
@@ -1325,23 +1302,23 @@ static IritPrsrHWCEdgeStruct *HWCFindBoundaryEdges(
 }
 
 /*****************************************************************************
-* AUXILIARY:							             *
+* AUXILIARY:							                                     *
 * Auxiliary function to calculate point to segment distance in 2D.           *
 *****************************************************************************/
 static IrtRType HWCDistPointSegment2D(IrtPtType P,
                                       IrtPtType A,
                                       IrtPtType B)
 {
-    IrtRType
+    IrtRType T,
         L2 = IRIT_SQR(A[0] - B[0]) + IRIT_SQR(A[1] - B[1]);
+    IrtPtType Proj;
+
 
     if (L2 < 1e-10)
         return sqrt(IRIT_SQR(P[0] - A[0]) + IRIT_SQR(P[1] - A[1]));
     else {
-        IrtRType
-            T = ((P[0] - A[0]) * (B[0] - A[0]) +
-                (P[1] - A[1]) * (B[1] - A[1])) / L2;
-        IrtPtType Proj;
+        T = ((P[0] - A[0]) * (B[0] - A[0]) +
+            (P[1] - A[1]) * (B[1] - A[1])) / L2;
 
         if (T < 0.0)
             T = 0.0;
@@ -1392,21 +1369,24 @@ static IrtRType HWCDistPointSegment2D(IrtPtType P,
 *         Caller owns the returned object and must free it.                  *
 *****************************************************************************/
 static IritPrsrObjectStruct *HWCBuildSilhouetteRuledSrf(
-                                          const IritPrsrObjectStruct *Contour,
-					  const IritPrsrObjectStruct *Solid,
-					  const IrtHmgnMatType ViewMat,
-					  const IritPrsrHWCDataStruct *Params)
+                                        const IritPrsrObjectStruct *Contour,
+                                        const IritPrsrObjectStruct *Solid,
+                                        const IrtHmgnMatType ViewMat,
+                                        const IritPrsrHWCDataStruct *Params)
 {
-    int k, n, Guard,
+    IritPrsrHWCEdgeStruct *boundaryEdges;
+    int k, n, Guard, b, *isBoundary, Len, iDx, leftIDx, rightIDx, Len1, Len2,
         bestStart = 0,
         bestLen = 0,
         numBoundaryEdges = 0,
         topStart = 0,
         topLen = 0;
-    IrtRType minX, minY, maxX, maxY, scaleX, scaleZ, Scale, Cx, Cy;
+    IrtRType minX, minY, maxX, maxY, scaleX, scaleZ, Scale, Cx, Cy, wxyLen,
+             Diag, distThresh, bottomThresh, minXBottom, maxXBottom, maxYPath1,
+             maxYPath2, Sx, Sy, Wx, Wy, Wz, Slope, ZShift;
     IrtVecType uVec, vVec, wVec;
     IrtHmgnMatType MatLocal;
-    IrtPtType *Pts2d;
+    IrtPtType *Pts2d, projP1, projP2, *top_Pts;
     IritPrsrVertexStruct *V, *Cur;
     IritCagdCrvStruct *Crv;
     IritCagdVecStruct YDir;
@@ -1513,7 +1493,7 @@ static IritPrsrObjectStruct *HWCBuildSilhouetteRuledSrf(
     /*  Therefore it can only cleanly sweep along views where the           */
     /* horizontal length of the view vector is non-negligible. We reject    */
     /* completely vertical views.					    */
-    IrtRType wxyLen = sqrt(wVec[0] * wVec[0] + wVec[1] * wVec[1]);
+    wxyLen = sqrt(wVec[0] * wVec[0] + wVec[1] * wVec[1]);
 
     if (wxyLen < 0.1) {
         IritFree(Pts2d);
@@ -1528,22 +1508,17 @@ static IritPrsrObjectStruct *HWCBuildSilhouetteRuledSrf(
     /*    Points very close to ANY boundary segment are identified as part  */
     /*    of the missing bottom. We then keep the longest contiguous	    */
     /*    sequence of points that are NOT missing.			    */
-    IritPrsrHWCEdgeStruct
-        *boundaryEdges = HWCFindBoundaryEdges(Solid, &numBoundaryEdges);
+    *boundaryEdges = HWCFindBoundaryEdges(Solid, &numBoundaryEdges);
 
     if (boundaryEdges != NULL && numBoundaryEdges > 0) {
-        int b,
-            *isBoundary = (int*) IritMalloc(sizeof(int) * n);
-        IrtRType 
-            Diag = sqrt((maxX - minX) * (maxX - minX) +
+        *isBoundary = (int*) IritMalloc(sizeof(int) * n);
+        Diag = sqrt((maxX - minX) * (maxX - minX) +
 			(maxY - minY) * (maxY - minY)),
             distThresh = Diag * 0.005;   /* 0.5% of diagonal as tolerance. */
 
         for (k = 0; k < n; ++k) {
             isBoundary[k] = 0;
             for (b = 0; b < numBoundaryEdges; ++b) {
-                IrtPtType projP1, projP2;
-
                 projP1[0] = boundaryEdges[b].Pt1[0] * uVec[0] +
 		             boundaryEdges[b].Pt1[1] * uVec[1] +
 		             boundaryEdges[b].Pt1[2] * uVec[2];
@@ -1565,8 +1540,8 @@ static IritPrsrObjectStruct *HWCBuildSilhouetteRuledSrf(
         /* Find the longest contiguous sequence of isBoundary == 0 (wrapping around). */
         for (k = 0; k < n; ++k) {
             if (isBoundary[k] == 0) {
-                int Len = 0;
-                int iDx = k;
+                Len = 0;
+                iDx = k;
                 while (Len < n && isBoundary[iDx] == 0) {
                     Len++;
                     iDx = (iDx + 1) % n;
@@ -1590,12 +1565,11 @@ static IritPrsrObjectStruct *HWCBuildSilhouetteRuledSrf(
     }
     else {
         /* Fallback if no boundary edges found: remove bottom 10%. */
-        IrtRType
-            bottomThresh = minY + (maxY - minY) * 0.10,
-            minXBottom = maxX + 1.0,
-            maxXBottom = minX - 1.0;
-        int leftIDx = -1,
-            rightIDx = -1;
+        bottomThresh = minY + (maxY - minY) * 0.10,
+        minXBottom = maxX + 1.0,
+        maxXBottom = minX - 1.0;
+        leftIDx = -1,
+        rightIDx = -1;
 
         for (k = 0; k < n; ++k) {
             if (Pts2d[k][1] <= bottomThresh) {
@@ -1614,21 +1588,19 @@ static IritPrsrObjectStruct *HWCBuildSilhouetteRuledSrf(
             (maxXBottom - minXBottom) > (maxX - minX) * 0.10) {
 
             /* Path 1: leftIdx to rightIdx (incrementing). */
-            IrtRType 
-                maxYPath1 = minY;
-            int Len1 = (rightIDx - leftIDx + n) % n;
+            maxYPath1 = minY;
+            Len1 = (rightIDx - leftIDx + n) % n;
             for (k = 0; k <= Len1; ++k) {
-                int iDx = (leftIDx + k) % n;
+                iDx = (leftIDx + k) % n;
                 if (Pts2d[iDx][1] > maxYPath1) 
                     maxYPath1 = Pts2d[iDx][1];
             }
 
             /* Path 2: rightIdx to leftIdx (incrementing). */
-            IrtRType 
-                maxYPath2 = minY;
-            int Len2 = (leftIDx - rightIDx + n) % n;
+            maxYPath2 = minY;
+            Len2 = (leftIDx - rightIDx + n) % n;
             for (k = 0; k <= Len2; ++k) {
-                int iDx = (rightIDx + k) % n;
+                iDx = (rightIDx + k) % n;
                 if (Pts2d[iDx][1] > maxYPath2) 
                     maxYPath2 = Pts2d[iDx][1];
             }
@@ -1645,8 +1617,7 @@ static IritPrsrObjectStruct *HWCBuildSilhouetteRuledSrf(
     }
 
     /* Extract the top path. */
-    IrtPtType 
-        *top_Pts = (IrtPtType*) IritMalloc(sizeof(IrtPtType) * topLen);
+    *top_Pts = (IrtPtType*) IritMalloc(sizeof(IrtPtType) * topLen);
 
     for (k = 0; k < topLen; ++k) {
         IRIT_PT_COPY(top_Pts[k], Pts2d[(topStart + k) % n]);
@@ -1667,15 +1638,13 @@ static IritPrsrObjectStruct *HWCBuildSilhouetteRuledSrf(
     }
 
     for (k = 0; k < topLen; ++k) {
-        IrtRType 
-            Sx = (top_Pts[k][0] - Cx) * Scale,
-            Sy = (top_Pts[k][1] - Cy) * Scale;
+        Sx = (top_Pts[k][0] - Cx) * Scale,
+        Sy = (top_Pts[k][1] - Cy) * Scale;
 
         /* Map back to 3D world coordinates. */
-        IrtRType 
-            Wx = Sx * uVec[0] + Sy * vVec[0],
-            Wy = Sx * uVec[1] + Sy * vVec[1],
-            Wz = Sx * uVec[2] + Sy * vVec[2];
+        Wx = Sx * uVec[0] + Sy * vVec[0],
+        Wy = Sx * uVec[1] + Sy * vVec[1],
+        Wz = Sx * uVec[2] + Sy * vVec[2];
 
         /* To bypass a critical math bug in the legacy hot_wire_cut.c logic,
          * we must pre-extrapolate the Z-coordinate. The legacy code computes:
@@ -1688,10 +1657,9 @@ static IritPrsrObjectStruct *HWCBuildSilhouetteRuledSrf(
          *   zShift = slope * (195.0 - 2 * Crv2_Y_rot)
          * After substituting Crv2_Y_rot = -wz * slope + wxyLen * FoamDepth / 2, we get:
          */
-        IrtRType 
-            Slope = wVec[2] / wxyLen,
-            ZShift = Slope * (195.0 - wxyLen * Params -> FoamDepth) +
-            2.0 * Wz * Slope * Slope;
+        Slope = wVec[2] / wxyLen,
+        ZShift = Slope * (195.0 - wxyLen * Params -> FoamDepth) +
+        2.0 * Wz * Slope * Slope;
 
         Crv -> Points[1][k] = Wx - wVec[0] * Params -> FoamDepth * 0.5;
         Crv -> Points[2][k] = Wy - wVec[1] * Params -> FoamDepth * 0.5;
@@ -1760,6 +1728,7 @@ static void HWCCombineGCodeFiles(const char *const *GcodeFiles,
         minZSeen = 99999.0,
         ExtraSafeZClearance = 150.0;
     char Line[IRIT_MAX_LINE_LEN];
+    IrtRType Diff;
 
     Fout = fopen(OutPath, "w");
     if (Fout == NULL) {
@@ -1803,7 +1772,7 @@ static void HWCCombineGCodeFiles(const char *const *GcodeFiles,
                        making the machine accumulate extra full rotations.
                        Instead, compute the shortest angular path. */
                     {
-                        IrtRType Diff = fmod(b - lastB, 360.0);
+                        Diff = fmod(b - lastB, 360.0);
                         if (Diff > 180.0) 
                             Diff -= 360.0;
                         if (Diff < -180.0) 
@@ -1899,11 +1868,11 @@ static void HWCCombineGCodeFiles(const char *const *GcodeFiles,
 *                                   process (can be a list or polyline).     *
 *****************************************************************************/
 static void HWCConvertPolylinesToPolygons(IritPrsrObjectStruct *PObj) {
+    IritPrsrObjectStruct *PList; 
+    int i = 0;
     if (PObj == NULL) 
         return;
     if (IRIT_PRSR_IS_OLST_OBJ(PObj)) {
-        IritPrsrObjectStruct *PList; 
-        int i = 0;
         while ((PList = IritPrsrListObjectGet(PObj, i++)) != NULL) {
             HWCConvertPolylinesToPolygons(PList);
         }
@@ -1958,10 +1927,10 @@ IrtRType HWCGenerateGCodeFromObj(IritPrsrObjectStruct *RawModel,
     IritPrsrObjectStruct 
         *Contour, *RuledSrf, *SimObj, *AllSimObjs,
         *Solid = NULL;
-    IrtHmgnMatType
+    IrtHmgnMatType 
         *Views = NULL;
-    IritPrsrHWCDataStruct 
-        HWCParams;
+    IritPrsrHWCDataStruct HWCParams;
+    IrtRType OldFineNess;
     char **gcodeFiles, gcodeFile[512], contourFile[512];
     int Vi, i,
         gcodeCount = 0,
@@ -1978,7 +1947,7 @@ IrtRType HWCGenerateGCodeFromObj(IritPrsrObjectStruct *RawModel,
 
     /* Convert any FreeForm surfaces to polygonal mesh. */
     {
-        IrtRType OldFineNess = IritPrsrFFCState.FineNess;
+        OldFineNess = IritPrsrFFCState.FineNess;
         if (FineNess > 0.0)
             IritPrsrFFCState.FineNess = FineNess;
         Solid = IritPrsrConvertFreeFormHierachy(RawModel, &IritPrsrFFCState,
