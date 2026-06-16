@@ -363,7 +363,7 @@ static IritPrsrObjectStruct *HWCBuildProjectUnionLocal(
         JIdx, Y1, Y2, X1, X2, a, b, Count, XStart, XEnd, XVal, MaxPath, PathLen, 
         Cx, Cy, FirstStep, Dir, *PathX, *PathY, NextDir, Found,
         Nx, Ny, IPath, Tmp, Xint,
-        MDx[8] = { 0, 1, 1, 1, 0, -1, -1, -1 },
+        MDX[8] = { 0, 1, 1, 1, 0, -1, -1, -1 },
         MDY[8] = { -1, -1, 0, 1, 1, 1, 0, -1 },
         StartX = -1,
         StartY = -1;
@@ -567,7 +567,7 @@ static IritPrsrObjectStruct *HWCBuildProjectUnionLocal(
             for (i = 0; i < 8; ++i) {
                 /* Turn 135 deg left to ensure we trace outside boundary. */
                 NextDir = (Dir + 5 + i) % 8;
-                Nx = Cx + MDx[NextDir];
+                Nx = Cx + MDX[NextDir];
                 Ny = Cy + MDY[NextDir];
 
                 if (Nx >= 0 &&
