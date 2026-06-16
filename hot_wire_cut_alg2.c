@@ -350,7 +350,7 @@ static IrtRType HWCCalcPolygonArea(IritPrsrObjectStruct *PObj)
 *****************************************************************************/
 static IritPrsrObjectStruct *HWCBuildProjectUnionLocal(
                                                 IritPrsrObjectStruct *Solid,
-						                        IrtHmgnMatType MatLocal)
+						IrtHmgnMatType MatLocal)
 {
     IrtRType Dx, Dy, Margin,
         MinX = IRIT_INFNTY,
@@ -359,9 +359,9 @@ static IritPrsrObjectStruct *HWCBuildProjectUnionLocal(
         MaxY = -IRIT_INFNTY;
     IritPrsrObjectStruct *PolyObj, *OutList;
     unsigned char *Grid;
-    int *Px, *Py, *Ints, x, y, i, j, Guard, PMinY, PMaxY, pMinX, NPts, PXVal, PyVal,
-        JIdx, Y1, Y2, X1, X2, a, b, Count, XStart, XEnd, XVal, MaxPath, PathLen, 
-        Cx, Cy, FirstStep, Dir, *PathX, *PathY, NextDir, Found,
+    int *Px, *Py, *Ints, x, y, i, j, Guard, PMinY, PMaxY, pMinX, NPts, PXVal, 
+        PyVal, JIdx, Y1, Y2, X1, X2, a, b, Count, XStart, XEnd, XVal, MaxPath, 
+        PathLen, Cx, Cy, FirstStep, Dir, *PathX, *PathY, NextDir, Found,
         Nx, Ny, IPath, Tmp, Xint,
         MDX[8] = { 0, 1, 1, 1, 0, -1, -1, -1 },
         MDY[8] = { -1, -1, 0, 1, 1, 1, 0, -1 },
@@ -1100,7 +1100,7 @@ static IrtHmgnMatType *HWCSelectViewsSampling(int NumSamples)
 }
 
 /*****************************************************************************
-* AUXILIARY:								                                 *
+* AUXILIARY:								     *
 * Auxiliary function to find missing boundary edges in an open solid.	     *
 *****************************************************************************/
 static IritPrsrHWCEdgeStruct *HWCFindBoundaryEdges(
@@ -1310,7 +1310,7 @@ static IritPrsrHWCEdgeStruct *HWCFindBoundaryEdges(
 }
 
 /*****************************************************************************
-* AUXILIARY:							                                     *
+* AUXILIARY:							             *
 * Auxiliary function to calculate point to segment distance in 2D.           *
 *****************************************************************************/
 static IrtRType HWCDistPointSegment2D(IrtPtType P,
@@ -1535,12 +1535,15 @@ static IritPrsrObjectStruct *HWCBuildSilhouetteRuledSrf(
                 ProjP1[0] = BoundaryEdges[b].Pt1[0] * uVec[0] +
 		             BoundaryEdges[b].Pt1[1] * uVec[1] +
 		             BoundaryEdges[b].Pt1[2] * uVec[2];
-                ProjP1[1] = BoundaryEdges[b].Pt1[0] * vVec[0] + BoundaryEdges[b].Pt1[1]
-                    * vVec[1] + BoundaryEdges[b].Pt1[2] * vVec[2];
-                ProjP2[0] = BoundaryEdges[b].Pt2[0] * uVec[0] + BoundaryEdges[b].Pt2[1]
-                    * uVec[1] + BoundaryEdges[b].Pt2[2] * uVec[2];
-                ProjP2[1] = BoundaryEdges[b].Pt2[0] * vVec[0] + BoundaryEdges[b].Pt2[1]
-                    * vVec[1] + BoundaryEdges[b].Pt2[2] * vVec[2];
+                ProjP1[1] = BoundaryEdges[b].Pt1[0] * vVec[0] + 
+                    BoundaryEdges[b].Pt1[1] * vVec[1] + 
+                    BoundaryEdges[b].Pt1[2] * vVec[2];
+                ProjP2[0] = BoundaryEdges[b].Pt2[0] * uVec[0] + 
+                    BoundaryEdges[b].Pt2[1] * uVec[1] + 
+                    BoundaryEdges[b].Pt2[2] * uVec[2];
+                ProjP2[1] = BoundaryEdges[b].Pt2[0] * vVec[0] + 
+                    BoundaryEdges[b].Pt2[1] * vVec[1] + 
+                    BoundaryEdges[b].Pt2[2] * vVec[2];
 
                 if (HWCDistPointSegment2D(Pts2d[k], ProjP1, ProjP2) < DistThresh) {
                     IsBoundary[k] = 1;
@@ -1564,7 +1567,8 @@ static IritPrsrObjectStruct *HWCBuildSilhouetteRuledSrf(
                     BestStart = k;
                 }
                 /* Fast forward k to the end of this non-boundary sequence. */
-                /* But only up to n-1 to avoid infinite loops if the whole thing wraps. */
+                /* But only up to n-1 to avoid infinite loops if the whole */
+                /* thing wraps. */
                 k += Len - 1;
             }
         }
@@ -1668,7 +1672,8 @@ static IritPrsrObjectStruct *HWCBuildSilhouetteRuledSrf(
          * By setting aBuggy = aTarget, we can algebraically derive the exact Z shift
          * needed per-point to cancel the bug out completely.
          *   zShift = slope * (195.0 - 2 * Crv2_Y_rot)
-         * After substituting Crv2_Y_rot = -wz * slope + WxyLen * FoamDepth / 2, we get:
+         * After substituting Crv2_Y_rot = -wz * slope + WxyLen * FoamDepth / 2, 
+         * we get:
          */
         Slope = wVec[2] / WxyLen,
         ZShift = Slope * (195.0 - WxyLen * Params -> FoamDepth) +
@@ -1688,7 +1693,7 @@ static IritPrsrObjectStruct *HWCBuildSilhouetteRuledSrf(
      *    This creates a cylinder (surface) whose rulings are exactly wVec.
      *    When IritPrsrHWCProcessRulingPair processes this surface, it computes
      *    Angle = atan2(Dx, Dy) = atan2(wVec[0], wVec[1]), and rotates the
-     *    clamps accordingly to perfectly align the Y-axis of the machine with wVec. */
+     *    clamps accordingly to perfectly align the Y-axis of the machine with wVec.*/
     YDir.Vec[0] = wVec[0] * Params -> FoamDepth;
     YDir.Vec[1] = wVec[1] * Params -> FoamDepth;
     YDir.Vec[2] = wVec[2] * Params -> FoamDepth;
@@ -1796,7 +1801,8 @@ static void HWCCombineGCodeFiles(const char *const *GcodeFiles,
                     if (z < MinZSeen) 
                         MinZSeen = z;
 
-                    /* Override any safe Z exits to provide massive clearance for taller foam blocks. */
+                    /* Override any safe Z exits to provide massive clearance for */
+                    /* taller foam blocks. */
                     if (Params != NULL && z >= Params -> FoamHeight) 
                         z = Params -> FoamHeight + ExtraSafeZClearance;
                     
